@@ -1,4 +1,4 @@
-version: 0.1
+version: 0.2
 heading_style: sentence-case
 quote_style: straight
 limits:
@@ -19,33 +19,159 @@ whitelist:
     - we move on
 buzzwords:
   throttle:
+    - delve
     - delve into
-    - navigate the landscape
-    - underscores
-    - showcasing
-    - pivotal
-    - realm
-    - meticulous
+    - deep dive
     - leverage
+    - utilise
+    - utilize
+    - facilitate
+    - optimise
+    - optimize
+    - embark
+    - embark on a journey
+    - underscore
+    - aims to explore
+    - aligns
+    - pivotal
+    - vital
+    - robust
+    - innovative
+    - seamless
+    - exemplary
+    - ever-evolving
+    - multifaceted
+    - groundbreaking
+    - holistic
+    - dynamic
+    - paradigm-shifting
+    - landscape
+    - realm
+    - tapestry
+    - efficiency
+    - transformation
+    - synergy
+    - paradigm
+    - roadmap
+    - ecosystem
+    - journey
+    - bandwidth
+    - stakeholder
+    - best practices
+    - strategic implementation
+    - deliverables
+    - adoption rate
+    - capacity building
+    - kpi
+    - proof of concept
+    - cutting-edge
+    - game-changing
+    - next-generation
+    - revolutionary
+    - state-of-the-art
+    - ai-powered
+    - robustly
+    - seamlessly
+    - significantly
+    - notably
+    - fundamentally
+    - inherently
+    - transformative
+    - journey of
+    - unprecedented
+    - plethora
+    - empower
+transitions:
+  throttle:
+    - furthermore
+    - moreover
+    - consequently
+    - thus
+    - accordingly
+    - nonetheless
+    - subsequently
+    - therefore
+    - at the same time
+    - to that end
+    - in addition to
+    - alongside this
+    - as a result
+    - in fact
+    - in essence
+    - in summary
+    - significantly
+    - remarkably
+    - notably
 puffery:
   ban:
-    - stands as a testament
-    - plays a pivotal role
-    - leaves a lasting impact
-    - rich cultural tapestry
-    - unwavering commitment
+    - rich cultural heritage
+    - vibrant cultural heritage
+    - cultural tapestry
     - breathtaking
+    - must-visit
+    - must-see
+    - stunning natural beauty
+    - enduring legacy
+    - lasting legacy
+    - nestled
+    - in the heart of
+    - stands as a symbol of
+    - stands as a testament
+    - plays a pivotal role in
+    - leaves a lasting impact
+    - hallmark of innovation
+    - gateway to
+    - thriving ecosystem
+    - vibrant ecosystem
+    - groundbreaking innovation
+    - unparalleled excellence
+    - a seamless journey
+    - a diverse tapestry
 templates:
   ban:
     - "^In conclusion"
     - "^Overall"
     - "^In summary"
+    - "^In essence"
     - "^Future prospects include"
+    - "^In today’s fast-paced world"
+    - "^In today's fast-paced world"
+    - "^In today’s ever-evolving world"
+    - "^In today's ever-evolving world"
+    - "\bit is worth noting\b"
+    - "\bit is important to note\b"
+    - "\bit should be mentioned\b"
+    - "\bit is worth considering\b"
+    - "\bone might argue\b"
+    - "\bone could contend\b"
+    - "\bbased on the information provided\b"
+    - "\baccording to the data\b"
+    - "\bevidently, this suggests\b"
     - "\bnot (?:just|only)\b.+\bbut (?:also|rather)\b"
     - "\bno [^,.;]+, no [^,.;]+, just [^,.;]+"
+    - "\bplay(?:s)? a significant role in shaping\b"
+    - "\baims to explore\b"
+    - "\btoday’s fast-paced world\b"
+    - "\btoday's fast-paced world\b"
 weasel:
   ban:
     - some critics argue
     - experts say
     - observers noted
     - industry reports show
+    - it should be mentioned that
+    - it is worth considering that
+    - it could be suggested that
+marketing_cliches:
+  ban:
+    - unlock the power of
+    - revolutionise the way
+    - revolutionize the way
+    - take your business to the next level
+    - game-changing solution
+    - unparalleled excellence
+    - cutting-edge technology
+    - seamlessly integrated
+    - state-of-the-art
+    - disruptive innovation
+    - next-generation

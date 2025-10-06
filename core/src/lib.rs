@@ -118,14 +118,68 @@ impl Default for BuzzwordConfig {
     fn default() -> Self {
         Self {
             throttle: vec![
+                "delve".into(),
                 "delve into".into(),
-                "navigate the landscape".into(),
-                "underscores".into(),
-                "showcasing".into(),
-                "pivotal".into(),
-                "realm".into(),
-                "meticulous".into(),
+                "deep dive".into(),
                 "leverage".into(),
+                "utilise".into(),
+                "utilize".into(),
+                "facilitate".into(),
+                "optimise".into(),
+                "optimize".into(),
+                "embark".into(),
+                "embark on a journey".into(),
+                "underscore".into(),
+                "aims to explore".into(),
+                "aligns".into(),
+                "pivotal".into(),
+                "vital".into(),
+                "robust".into(),
+                "innovative".into(),
+                "seamless".into(),
+                "exemplary".into(),
+                "ever-evolving".into(),
+                "multifaceted".into(),
+                "groundbreaking".into(),
+                "holistic".into(),
+                "dynamic".into(),
+                "paradigm-shifting".into(),
+                "landscape".into(),
+                "realm".into(),
+                "tapestry".into(),
+                "efficiency".into(),
+                "transformation".into(),
+                "synergy".into(),
+                "paradigm".into(),
+                "roadmap".into(),
+                "ecosystem".into(),
+                "journey".into(),
+                "bandwidth".into(),
+                "stakeholder".into(),
+                "best practices".into(),
+                "strategic implementation".into(),
+                "deliverables".into(),
+                "adoption rate".into(),
+                "capacity building".into(),
+                "kpi".into(),
+                "proof of concept".into(),
+                "cutting-edge".into(),
+                "game-changing".into(),
+                "next-generation".into(),
+                "revolutionary".into(),
+                "state-of-the-art".into(),
+                "ai-powered".into(),
+                "robustly".into(),
+                "seamlessly".into(),
+                "significantly".into(),
+                "notably".into(),
+                "fundamentally".into(),
+                "inherently".into(),
+                "transformative".into(),
+                "journey of".into(),
+                "unprecedented".into(),
+                "plethora".into(),
+                "empower".into(),
             ],
         }
     }
@@ -141,9 +195,11 @@ pub struct Config {
     pub scores: ScoreThresholds,
     pub whitelist: Whitelist,
     pub buzzwords: BuzzwordConfig,
+    pub transitions: BuzzwordConfig,
     pub puffery: PhraseList,
     pub templates: PhraseList,
     pub weasel: PhraseList,
+    pub marketing_cliches: PhraseList,
 }
 
 impl Default for Config {
@@ -155,14 +211,54 @@ impl Default for Config {
             scores: ScoreThresholds::default(),
             whitelist: Whitelist::default(),
             buzzwords: BuzzwordConfig::default(),
+            transitions: BuzzwordConfig {
+                throttle: vec![
+                    "furthermore".into(),
+                    "moreover".into(),
+                    "consequently".into(),
+                    "thus".into(),
+                    "accordingly".into(),
+                    "nonetheless".into(),
+                    "subsequently".into(),
+                    "therefore".into(),
+                    "at the same time".into(),
+                    "to that end".into(),
+                    "in addition to".into(),
+                    "alongside this".into(),
+                    "as a result".into(),
+                    "in fact".into(),
+                    "in essence".into(),
+                    "in summary".into(),
+                    "significantly".into(),
+                    "remarkably".into(),
+                    "notably".into(),
+                ],
+            },
             puffery: PhraseList {
                 ban: vec![
-                    "stands as a testament".into(),
-                    "plays a pivotal role".into(),
-                    "leaves a lasting impact".into(),
-                    "rich cultural tapestry".into(),
-                    "unwavering commitment".into(),
+                    "rich cultural heritage".into(),
+                    "vibrant cultural heritage".into(),
+                    "cultural tapestry".into(),
                     "breathtaking".into(),
+                    "must-visit".into(),
+                    "must-see".into(),
+                    "stunning natural beauty".into(),
+                    "enduring legacy".into(),
+                    "lasting legacy".into(),
+                    "nestled".into(),
+                    "in the heart of".into(),
+                    "stands as a symbol of".into(),
+                    "stands as a testament".into(),
+                    "plays a pivotal role in".into(),
+                    "leaves a lasting impact".into(),
+                    "hallmark of innovation".into(),
+                    "gateway to".into(),
+                    "thriving ecosystem".into(),
+                    "vibrant ecosystem".into(),
+                    "groundbreaking innovation".into(),
+                    "unparalleled excellence".into(),
+                    "a seamless journey".into(),
+                    "a diverse tapestry".into(),
                 ],
             },
             templates: PhraseList {
@@ -170,9 +266,27 @@ impl Default for Config {
                     "^in conclusion".into(),
                     "^overall".into(),
                     "^in summary".into(),
+                    "^in essence".into(),
                     "^future prospects include".into(),
+                    "^in today’s fast-paced world".into(),
+                    "^in today's fast-paced world".into(),
+                    "^in today’s ever-evolving world".into(),
+                    "^in today's ever-evolving world".into(),
+                    "\\bit is worth noting\\b".into(),
+                    "\\bit is important to note\\b".into(),
+                    "\\bit should be mentioned\\b".into(),
+                    "\\bit is worth considering\\b".into(),
+                    "\\bone might argue\\b".into(),
+                    "\\bone could contend\\b".into(),
+                    "\\bbased on the information provided\\b".into(),
+                    "\\baccording to the data\\b".into(),
+                    "\\bevidently, this suggests\\b".into(),
                     "\\bnot (?:just|only)\\b.+\\bbut (?:also|rather)\\b".into(),
                     "\\bno [^,.;]+, no [^,.;]+, just [^,.;]+".into(),
+                    "\\bplay(?:s)? a significant role in shaping\\b".into(),
+                    "\\baims to explore\\b".into(),
+                    "\\btoday’s fast-paced world\\b".into(),
+                    "\\btoday's fast-paced world\\b".into(),
                 ],
             },
             weasel: PhraseList {
@@ -181,6 +295,24 @@ impl Default for Config {
                     "experts say".into(),
                     "observers noted".into(),
                     "industry reports show".into(),
+                    "it should be mentioned that".into(),
+                    "it is worth considering that".into(),
+                    "it could be suggested that".into(),
+                ],
+            },
+            marketing_cliches: PhraseList {
+                ban: vec![
+                    "unlock the power of".into(),
+                    "revolutionise the way".into(),
+                    "revolutionize the way".into(),
+                    "take your business to the next level".into(),
+                    "game-changing solution".into(),
+                    "unparalleled excellence".into(),
+                    "cutting-edge technology".into(),
+                    "seamlessly integrated".into(),
+                    "state-of-the-art".into(),
+                    "disruptive innovation".into(),
+                    "next-generation".into(),
                 ],
             },
         }
@@ -198,6 +330,8 @@ pub enum Category {
     ConnectorGlut,
     Template,
     Weasel,
+    Transition,
+    Marketing,
     EmDash,
     Formatting,
     QuoteStyle,
@@ -213,6 +347,8 @@ impl std::fmt::Display for Category {
             Category::ConnectorGlut => "connector-glut",
             Category::Template => "template",
             Category::Weasel => "weasel",
+            Category::Transition => "transition",
+            Category::Marketing => "marketing",
             Category::EmDash => "em-dash",
             Category::Formatting => "formatting",
             Category::QuoteStyle => "quote-style",
@@ -264,6 +400,8 @@ pub struct Analyzer {
     puffery_matcher: Option<AhoCorasick>,
     buzzword_matcher: Option<AhoCorasick>,
     weasel_matcher: Option<AhoCorasick>,
+    transition_matcher: Option<AhoCorasick>,
+    marketing_matcher: Option<AhoCorasick>,
     template_regexes: Vec<Regex>,
     rule_of_three_regex: Regex,
     range_regex: Regex,
@@ -308,6 +446,26 @@ impl Analyzer {
             )
         };
 
+        let transition_matcher = if config.transitions.throttle.is_empty() {
+            None
+        } else {
+            Some(
+                AhoCorasickBuilder::new()
+                    .ascii_case_insensitive(true)
+                    .build(&config.transitions.throttle),
+            )
+        };
+
+        let marketing_matcher = if config.marketing_cliches.ban.is_empty() {
+            None
+        } else {
+            Some(
+                AhoCorasickBuilder::new()
+                    .ascii_case_insensitive(true)
+                    .build(&config.marketing_cliches.ban),
+            )
+        };
+
         let mut template_regexes = Vec::new();
         for pattern in &config.templates.ban {
             let pattern = pattern.trim();
@@ -331,6 +489,8 @@ impl Analyzer {
             puffery_matcher,
             buzzword_matcher,
             weasel_matcher,
+            transition_matcher,
+            marketing_matcher,
             template_regexes,
             rule_of_three_regex,
             range_regex,
@@ -345,6 +505,8 @@ impl Analyzer {
 
         self.detect_puffery(text, &filtered, &mut diagnostics, &mut category_counts);
         self.detect_buzzwords(text, &filtered, &mut diagnostics, &mut category_counts);
+        self.detect_transitions(text, &filtered, &mut diagnostics, &mut category_counts);
+        self.detect_marketing(text, &filtered, &mut diagnostics, &mut category_counts);
         self.detect_templates(text, &filtered, &mut diagnostics, &mut category_counts);
         self.detect_ranges(text, &filtered, &mut diagnostics, &mut category_counts);
         self.detect_connectors(text, &filtered, &mut diagnostics, &mut category_counts);
@@ -441,6 +603,66 @@ impl Analyzer {
                     snippet,
                 });
                 *counts.entry(Category::Buzzword).or_default() += 1;
+            }
+        }
+    }
+
+    fn detect_transitions(
+        &self,
+        text: &str,
+        filtered: &DisabledRanges,
+        diagnostics: &mut Vec<Diagnostic>,
+        counts: &mut BTreeMap<Category, usize>,
+    ) {
+        if let Some(matcher) = &self.transition_matcher {
+            for mat in matcher.find_iter(text.as_bytes()) {
+                if filtered.is_disabled(mat.start()) {
+                    continue;
+                }
+                let snippet = slice_snippet(text, mat.start(), mat.end());
+                if self.allow_phrase_set.contains(&snippet.to_lowercase()) {
+                    continue;
+                }
+                let location = byte_to_location(text, mat.start());
+                diagnostics.push(Diagnostic {
+                    category: Category::Transition,
+                    message: format!("Transitional filler detected: `{snippet}`"),
+                    suggestion: Some("Trim or replace with a simple connector.".into()),
+                    location,
+                    span: (mat.start(), mat.end()),
+                    snippet,
+                });
+                *counts.entry(Category::Transition).or_default() += 1;
+            }
+        }
+    }
+
+    fn detect_marketing(
+        &self,
+        text: &str,
+        filtered: &DisabledRanges,
+        diagnostics: &mut Vec<Diagnostic>,
+        counts: &mut BTreeMap<Category, usize>,
+    ) {
+        if let Some(matcher) = &self.marketing_matcher {
+            for mat in matcher.find_iter(text.as_bytes()) {
+                if filtered.is_disabled(mat.start()) {
+                    continue;
+                }
+                let snippet = slice_snippet(text, mat.start(), mat.end());
+                if self.allow_phrase_set.contains(&snippet.to_lowercase()) {
+                    continue;
+                }
+                let location = byte_to_location(text, mat.start());
+                diagnostics.push(Diagnostic {
+                    category: Category::Marketing,
+                    message: format!("Marketing cliché detected: `{snippet}`"),
+                    suggestion: Some("Swap for factual language.".into()),
+                    location,
+                    span: (mat.start(), mat.end()),
+                    snippet,
+                });
+                *counts.entry(Category::Marketing).or_default() += 1;
             }
         }
     }
@@ -881,12 +1103,33 @@ fn replacement_for(phrase: &str) -> Option<String> {
     let mut map = HashMap::new();
     map.insert("delve into", "look at");
     map.insert("navigate the landscape", "map the area");
+    map.insert("delve", "look at");
+    map.insert("deep dive", "look closely");
     map.insert("underscores", "shows");
     map.insert("showcasing", "showing");
     map.insert("pivotal", "important");
     map.insert("realm", "field");
     map.insert("meticulous", "detailed");
     map.insert("leverage", "use");
+    map.insert("utilise", "use");
+    map.insert("utilize", "use");
+    map.insert("facilitate", "help");
+    map.insert("optimise", "improve");
+    map.insert("optimize", "improve");
+    map.insert("embark", "start");
+    map.insert("embark on a journey", "start");
+    map.insert("underscore", "highlight");
+    map.insert("aims to explore", "studies");
+    map.insert("aligns", "fits");
+    map.insert("seamless", "smooth");
+    map.insert("seamlessly", "smoothly");
+    map.insert("robust", "solid");
+    map.insert("robustly", "solidly");
+    map.insert("innovative", "new");
+    map.insert("transformative", "changing");
+    map.insert("unprecedented", "new");
+    map.insert("plethora", "many");
+    map.insert("empower", "help");
     map.get(phrase).map(|s| s.to_string())
 }
 
@@ -952,5 +1195,25 @@ mod tests {
             .diagnostics
             .iter()
             .any(|d| d.category == Category::Weasel));
+    }
+
+    #[test]
+    fn detects_transition_phrase() {
+        let a = analyzer();
+        let report = a.analyze("Furthermore, we will ship the feature tomorrow.");
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|d| d.category == Category::Transition));
+    }
+
+    #[test]
+    fn detects_marketing_cliche() {
+        let a = analyzer();
+        let report = a.analyze("This is a game-changing solution that unlocks the power of data.");
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|d| d.category == Category::Marketing));
     }
 }

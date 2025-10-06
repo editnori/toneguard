@@ -1,5 +1,5 @@
 # ToneGuard
-ToneGuard scans Markdown and plain-text documentation for stylistic tics that commonly appear in large language model prose. The tool highlights AI-like phrasing (puffery, buzzwords, negative parallelism, rule-of-three lists, connector overload, template conclusions, and more) while protecting Layth’s direct, lowercase-forward voice.
+ToneGuard scans Markdown and plain-text documentation for stylistic tics that commonly appear in large language model prose. It flags puffery, buzzwords, over-formal transitions, marketing clichés, negative parallelism, rule-of-three lists, connector overload, template conclusions, and other AI tells while protecting Layth’s direct, lowercase-forward voice.
 
 ## Components
 
@@ -18,13 +18,21 @@ The CLI reports AI-style detections, category counts, and a density score (flags
 
 ## Configuration
 
-Rules, thresholds, and whitelists live in `layth-style.yml`. Adjust banned phrases, connector limits, and heading preferences per repository. Files can locally disable checks via:
+Rules, thresholds, and whitelists live in `layth-style.yml`. The defaults include expanded buzzword throttles, dedicated transition throttles, and hard bans for marketing clichés and puffery. Files can locally disable checks via:
 
 ```markdown
 <!-- dwg:off -->
 verbatim text or quotes
 <!-- dwg:on -->
 ```
+
+Key sections of the YAML:
+
+- `buzzwords.throttle`: verbs, adjectives, and jargon that should appear rarely.
+- `transitions.throttle`: essay-style connectors (e.g. “furthermore”, “consequently”).
+- `puffery.ban` / `marketing_cliches.ban`: phrases that nearly always oversell.
+- `templates.ban`: regexes for boilerplate openers and negative parallelism.
+- `weasel.ban`: vague attributions and hedged qualifiers.
 
 ## Extension
 
