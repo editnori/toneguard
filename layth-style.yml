@@ -1,0 +1,51 @@
+version: 0.1
+heading_style: sentence-case
+quote_style: straight
+limits:
+  em_dashes_per_paragraph: 1
+  connectors_per_sentence: 1
+  rule_of_three_per_paragraph: 0
+scores:
+  warn_threshold_per_100w: 3
+  fail_threshold_per_100w: 6
+whitelist:
+  allowed_typos:
+    - detmerinsitc
+    - analye
+    - parallesl
+  allowed_phrases:
+    - and then
+    - just ship it
+    - we move on
+buzzwords:
+  throttle:
+    - delve into
+    - navigate the landscape
+    - underscores
+    - showcasing
+    - pivotal
+    - realm
+    - meticulous
+    - leverage
+puffery:
+  ban:
+    - stands as a testament
+    - plays a pivotal role
+    - leaves a lasting impact
+    - rich cultural tapestry
+    - unwavering commitment
+    - breathtaking
+templates:
+  ban:
+    - "^In conclusion"
+    - "^Overall"
+    - "^In summary"
+    - "^Future prospects include"
+    - "\bnot (?:just|only)\b.+\bbut (?:also|rather)\b"
+    - "\bno [^,.;]+, no [^,.;]+, just [^,.;]+"
+weasel:
+  ban:
+    - some critics argue
+    - experts say
+    - observers noted
+    - industry reports show

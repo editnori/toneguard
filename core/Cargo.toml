@@ -1,0 +1,18 @@
+[package]
+name = "dwg-core"
+edition = "2021"
+version = "0.1.0"
+
+[lib]
+name = "dwg_core"
+path = "src/lib.rs"
+
+[dependencies]
+aho-corasick = { workspace = true }
+anyhow = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+unicode-segmentation = { workspace = true }
+walkdir = { workspace = true }

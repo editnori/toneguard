@@ -1,0 +1,14 @@
+[package]
+name = "dwg-cli"
+edition = "2021"
+version = "0.1.0"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+console = { workspace = true }
+dwg-core = { path = "../core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+walkdir = { workspace = true }

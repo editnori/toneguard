@@ -1,0 +1,52 @@
+{
+  "name": "dwg-vscode",
+  "displayName": "Deterministic Writing Guard",
+  "description": "Highlights AI-styled writing patterns by shelling out to the dwg CLI.",
+  "version": "0.1.0",
+  "publisher": "layth",
+  "engines": {
+    "vscode": "^1.86.0"
+  },
+  "categories": [
+    "Linters"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onLanguage:markdown"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "Deterministic Writing Guard",
+      "properties": {
+        "dwg.command": {
+          "type": "string",
+          "default": "dwg-cli",
+          "description": "Executable that outputs DWG JSON diagnostics (typically dwg-cli)."
+        },
+        "dwg.configPath": {
+          "type": "string",
+          "default": "layth-style.yml",
+          "description": "Path to the DWG configuration file." 
+        },
+        "dwg.debounceMs": {
+          "type": "number",
+          "default": 400,
+          "description": "Debounce time before running lint after edits."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p tsconfig.json",
+    "lint": "eslint src --ext ts",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.25",
+    "@types/vscode": "^1.86.0",
+    "eslint": "^8.56.0",
+    "typescript": "^5.4.3",
+    "vsce": "^2.15.0"
+  }
+}
