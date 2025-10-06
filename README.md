@@ -1,5 +1,5 @@
 # ToneGuard
-# ToneGuard scans Markdown and plain-text documentation for stylistic tics that commonly appear in large language model prose. The tool highlights AI-like phrasing (puffery, buzzwords, negative parallelism, rule-of-three lists, connector overload, template conclusions, and more) while protecting Layth’s direct, lowercase-forward voice.
+ToneGuard scans Markdown and plain-text documentation for stylistic tics that commonly appear in large language model prose. The tool highlights AI-like phrasing (puffery, buzzwords, negative parallelism, rule-of-three lists, connector overload, template conclusions, and more) while protecting Layth’s direct, lowercase-forward voice.
 
 ## Components
 
