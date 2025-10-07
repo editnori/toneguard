@@ -2,12 +2,19 @@
 name = "dwg-cli"
 edition = "2021"
 version = "0.1.36"
+description = "Command-line interface for the Deterministic Writing Guard style linter."
+license = "MIT"
+repository = "https://github.com/editnori/toneguard"
+homepage = "https://github.com/editnori/toneguard"
+documentation = "https://github.com/editnori/toneguard"
+keywords = ["lint", "writing", "style"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 anyhow = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 console = { workspace = true }
-dwg-core = { path = "../core" }
+dwg-core = { path = "../core", version = "0.1.36" }
 globset = { workspace = true }
 pathdiff = "0.2"
 regex = { workspace = true }

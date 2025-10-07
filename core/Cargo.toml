@@ -2,6 +2,13 @@
 name = "dwg-core"
 edition = "2021"
 version = "0.1.36"
+description = "Deterministic Writing Guard core analysis engine for spotting AI-styled prose."
+license = "MIT"
+repository = "https://github.com/editnori/toneguard"
+homepage = "https://github.com/editnori/toneguard"
+documentation = "https://github.com/editnori/toneguard"
+keywords = ["lint", "writing", "style"]
+categories = ["text-processing"]
 
 [lib]
 name = "dwg_core"
