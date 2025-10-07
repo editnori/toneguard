@@ -17,22 +17,42 @@ ToneGuard is organised as a Cargo workspace with the following packages:
 Each crate shares a single version and configuration so updates stay consistent.
 
 ## Quickstart
-1. Install Rust stable (if you haven't already).
-2. Install the CLI once; it then works from any repo on your machine:
+Copy–paste friendly steps for getting ToneGuard running everywhere:
+
+1. Install the CLI globally (run from any directory):
 
    ```bash
    cargo install --git https://github.com/editnori/toneguard.git --tag v0.1.36 --bin dwg-cli --force
    ```
 
-3. Lint any project by running `dwg-cli` from that repo (no source checkout required):
+   Verify it’s on your PATH:
 
    ```bash
+   dwg-cli --version
+   ```
+
+2. Lint any repository (no need to clone ToneGuard):
+
+   ```bash
+   cd path\to\your\project
    dwg-cli --config layth-style.yml --strict .
    ```
 
-4. Install the VS Code extension via **Extensions → Install from VSIX…** and choose `vscode-extension/toneguard-0.1.36.vsix`. The extension launches `dwg-cli` from your PATH, so the single install in step 2 covers every workspace.
+   If the repo doesn’t already have a config, copy `layth-style.yml` from this project or point `--config` at a shared copy.
 
-Keep a copy of `layth-style.yml` in each repo (or point `dwg.configPath` to a shared location) so the CLI and extension pick up your preferred rules.
+3. Install the VS Code extension once:
+
+   ```bash
+   git clone https://github.com/editnori/toneguard.git
+   cd toneguard/vscode-extension
+   npm install
+   npm run compile
+   npx @vscode/vsce package
+   ```
+
+   Open VS Code → **Extensions → Install from VSIX…** and pick the generated `toneguard-0.1.36.vsix`. After that the extension will find `dwg-cli` via your PATH in every workspace.
+
+Keep a copy of `layth-style.yml` in each repo (or set `dwg.configPath` to a shared location) so both the CLI and the extension load the rules you expect.
 
 ## Dependencies
 Install the following tools before building. They match the workspace's tested toolchain:
