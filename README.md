@@ -124,6 +124,24 @@ Repo checks:
 
 Removing the redundant lockfile (or adding it to `.gitignore`) resolves the warning. These repo-level diagnostics catch common AI-agent slipups like duplicate build artifacts, slop file variants, or banned directories before they land in main.
 
+Another common case is the “two versions of the same script” problem:
+
+```text
+$ tree scripts/
+scripts/
+├── deploy.sh
+└── deploy-final.sh
+```
+
+ToneGuard reports:
+
+```
+Repo checks:
+  - scripts/deploy.sh: Multiple variant files detected: scripts/deploy.sh → ["deploy-final.sh", "deploy.sh"]
+```
+
+Delete or rename the stray copy and re-run `dwg-cli --strict .` to clear the hygiene warning.
+
 ## Dependencies
 Install the following tools before building. They match the workspace's tested toolchain:
 - Rust 1.75+ for the workspace.
