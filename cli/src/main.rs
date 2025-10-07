@@ -173,7 +173,9 @@ fn run_lint(args: Args) -> anyhow::Result<()> {
         println!();
     }
 
-    let mut files = collect_files(&args.paths)?;
+    let file_ignore = build_ignore_set(&cfg.repo_rules.ignore_globs)?;
+
+    let mut files = collect_files(&args.paths, file_ignore.as_ref())?;
     files.sort();
 
     let mut file_reports = Vec::new();
@@ -247,17 +249,46 @@ fn run_lint(args: Args) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn collect_files(paths: &[PathBuf]) -> anyhow::Result<Vec<PathBuf>> {
+fn build_ignore_set(patterns: &[String]) -> anyhow::Result<Option<GlobSet>> {
+    if patterns.is_empty() {
+        return Ok(None);
+    }
+    let mut builder = GlobSetBuilder::new();
+    for pattern in patterns {
+        builder.add(Glob::new(pattern)?);
+    }
+    Ok(Some(builder.build()?))
+}
+
+fn collect_files(paths: &[PathBuf], ignore: Option<&GlobSet>) -> anyhow::Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     for path in paths {
         if path.is_dir() {
-            for entry in WalkDir::new(path) {
-                let entry = entry?;
-                if entry.file_type().is_file() && is_supported(entry.path()) {
-                    files.push(entry.path().to_path_buf());
+            let mut walker = WalkDir::new(path).into_iter();
+            while let Some(entry_res) = walker.next() {
+                let entry = entry_res?;
+                let entry_path = entry.path();
+                if let Some(set) = ignore {
+                    if set.is_match(entry_path) {
+                        if entry.file_type().is_dir() {
+                            walker.skip_current_dir();
+                        }
+                        continue;
+                    }
+                }
+                if entry.file_type().is_dir() {
+                    continue;
+                }
+                if entry.file_type().is_file() && is_supported(entry_path) {
+                    files.push(entry_path.to_path_buf());
                 }
             }
         } else if path.is_file() && is_supported(path) {
+            if let Some(set) = ignore {
+                if set.is_match(path) {
+                    continue;
+                }
+            }
             files.push(path.clone());
         }
     }

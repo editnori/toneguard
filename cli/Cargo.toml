@@ -1,7 +1,7 @@
 [package]
 name = "dwg-cli"
 edition = "2021"
-version = "0.1.34"
+version = "0.1.35"
 
 [dependencies]
 anyhow = { workspace = true }
