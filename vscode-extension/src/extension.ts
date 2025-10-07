@@ -102,7 +102,52 @@ async function runLint(document: vscode.TextDocument): Promise<void> {
     const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
     const cwd = workspaceFolder?.uri.fsPath ?? path.dirname(document.uri.fsPath);
 
-    const args = ['--json', '--quiet', '--config', configPath, document.uri.fsPath];
+    const args = ['--json', '--quiet', '--config', configPath];
+
+    const forcedProfile = configuration.get<string>('dwg.profile', '').trim();
+    if (forcedProfile) {
+        args.push('--profile', forcedProfile);
+    }
+    const strict = configuration.get<boolean>('dwg.strict', false);
+    if (strict) {
+        args.push('--strict');
+    }
+    const noRepo = configuration.get<boolean>('dwg.noRepoChecks', false);
+    if (noRepo) {
+        args.push('--no-repo-checks');
+    }
+    const onlyCats = configuration.get<string[]>('dwg.onlyCategories', []) ?? [];
+    const enableCats = configuration.get<string[]>('dwg.enableCategories', []) ?? [];
+    const disableCats = configuration.get<string[]>('dwg.disableCategories', []) ?? [];
+    if (onlyCats.length) {
+        args.push('--only', onlyCats.join(','));
+    }
+    if (enableCats.length) {
+        args.push('--enable', enableCats.join(','));
+    }
+    if (disableCats.length) {
+        args.push('--disable', disableCats.join(','));
+    }
+    const sets = configuration.get<string[]>('dwg.set', []) ?? [];
+    for (const s of sets) {
+        if (s && s.includes('=')) {
+            args.push('--set', s);
+        }
+    }
+    const onlyRepo = configuration.get<string[]>('dwg.onlyRepoCategories', []) ?? [];
+    const enableRepo = configuration.get<string[]>('dwg.enableRepoCategories', []) ?? [];
+    const disableRepo = configuration.get<string[]>('dwg.disableRepoCategories', []) ?? [];
+    if (onlyRepo.length) {
+        args.push('--only-repo', onlyRepo.join(','));
+    }
+    if (enableRepo.length) {
+        args.push('--enable-repo', enableRepo.join(','));
+    }
+    if (disableRepo.length) {
+        args.push('--disable-repo', disableRepo.join(','));
+    }
+
+    args.push(document.uri.fsPath);
     const { stdout, stderr, exitCode } = await execCommand(command, args, cwd);
 
     if (!stdout.trim()) {

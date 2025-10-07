@@ -1,7 +1,7 @@
 [package]
 name = "dwg-core"
 edition = "2021"
-version = "0.1.0"
+version = "0.1.32"
 
 [lib]
 name = "dwg_core"
@@ -10,6 +10,8 @@ path = "src/lib.rs"
 [dependencies]
 aho-corasick = { workspace = true }
 anyhow = { workspace = true }
+globset = { workspace = true }
+once_cell = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

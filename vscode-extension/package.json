@@ -1,9 +1,9 @@
 {
-  "name": "dwg-vscode",
-  "displayName": "Deterministic Writing Guard",
-  "description": "Highlights AI-styled writing patterns by shelling out to the dwg CLI.",
-  "version": "0.1.0",
-  "publisher": "layth",
+  "name": "toneguard",
+  "displayName": "ToneGuard",
+  "description": "Highlights AI-style writing patterns by shelling out to the ToneGuard CLI.",
+  "version": "0.1.32",
+  "publisher": "editnori",
   "engines": {
     "vscode": "^1.86.0"
   },
@@ -15,6 +15,10 @@
     "onLanguage:markdown"
   ],
   "main": "./out/extension.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/editnori/toneguard"
+  },
   "contributes": {
     "configuration": {
       "title": "Deterministic Writing Guard",
@@ -33,6 +37,174 @@
           "type": "number",
           "default": 400,
           "description": "Debounce time before running lint after edits."
+        },
+        "dwg.profile": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Force a profile for all files (bypasses glob matching). Leave blank to use autodetected profiles."
+        },
+        "dwg.enableCategories": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "puffery",
+              "buzzword",
+              "negative-parallel",
+              "rule-of-three",
+              "connector-glut",
+              "template",
+              "weasel",
+              "transition",
+              "marketing",
+              "structure",
+              "call-to-action",
+              "sentence-length",
+              "repetition",
+              "cadence",
+              "confidence",
+              "broad-term",
+              "tone",
+              "em-dash",
+              "formatting",
+              "quote-style"
+            ]
+          },
+          "default": [],
+          "markdownDescription": "Additional diagnostic categories to enable. Categories turned on here work alongside defaults."
+        },
+        "dwg.disableCategories": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "puffery",
+              "buzzword",
+              "negative-parallel",
+              "rule-of-three",
+              "connector-glut",
+              "template",
+              "weasel",
+              "transition",
+              "marketing",
+              "structure",
+              "call-to-action",
+              "sentence-length",
+              "repetition",
+              "cadence",
+              "confidence",
+              "broad-term",
+              "tone",
+              "em-dash",
+              "formatting",
+              "quote-style"
+            ]
+          },
+          "default": [],
+          "markdownDescription": "Diagnostic categories to disable. Use this to silence certain checks (e.g., transitions)."
+        },
+        "dwg.onlyCategories": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "puffery",
+              "buzzword",
+              "negative-parallel",
+              "rule-of-three",
+              "connector-glut",
+              "template",
+              "weasel",
+              "transition",
+              "marketing",
+              "structure",
+              "call-to-action",
+              "sentence-length",
+              "repetition",
+              "cadence",
+              "confidence",
+              "broad-term",
+              "tone",
+              "em-dash",
+              "formatting",
+              "quote-style"
+            ]
+          },
+          "default": [],
+          "markdownDescription": "Run only this subset of categories. Equivalent to `--only`."
+        },
+        "dwg.set": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "markdownDescription": "Override config values at runtime (e.g., `profile_defaults.min_sentences_per_section=2`). See README for keys."
+        },
+        "dwg.strict": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Exit with non-zero when density ≥ warn threshold. Causes the Problems banner to highlight issues aggressively."
+        },
+        "dwg.noRepoChecks": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Skip repo-wide hygiene (duplicate lockfiles, stray markdown, variant copies).\nDefaults to **false** so all repo slop checks run."
+        },
+        "dwg.enableRepoCategories": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "slop",
+              "banned-dir",
+              "banned-file",
+              "suspicious-name",
+              "lockfile",
+              "large-json",
+              "stray-markdown",
+              "dup-variants",
+              "walk"
+            ]
+          },
+          "default": [],
+          "markdownDescription": "Additional repo issue categories to enable. Defaults already include all categories; use to re-add after disabling."
+        },
+        "dwg.disableRepoCategories": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "slop",
+              "banned-dir",
+              "banned-file",
+              "suspicious-name",
+              "lockfile",
+              "large-json",
+              "stray-markdown",
+              "dup-variants",
+              "walk"
+            ]
+          },
+          "default": [],
+          "markdownDescription": "Repo issue categories to disable (e.g., hide stray-markdown warnings)."
+        },
+        "dwg.onlyRepoCategories": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "slop",
+              "banned-dir",
+              "banned-file",
+              "suspicious-name",
+              "lockfile",
+              "large-json",
+              "stray-markdown",
+              "dup-variants",
+              "walk"
+            ]
+          },
+          "default": [],
+          "markdownDescription": "Check only this subset of repo issue categories (equivalent to `--only-repo`)."
         }
       }
     }
