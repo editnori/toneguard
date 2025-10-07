@@ -5,24 +5,20 @@ The ToneGuard VS Code extension shells out to the `dwg-cli` binary and surfaces 
 
 ## Quickstart
 1. Install the CLI globally (once per machine):  
-   `cargo install --git https://github.com/editnori/toneguard.git --tag v0.1.36 --bin dwg-cli --force`
-2. Clone the repo and drop into the extension folder:
+   `cargo install dwg-cli --force`
+2. Grab the latest `toneguard-*.vsix` from the releases page, or build it yourself:
 
    ```bash
    git clone https://github.com/editnori/toneguard.git
    cd toneguard/vscode-extension
-   ```
-
-3. Install deps and build:
-
-   ```bash
    npm install
    npm run compile
+   npx @vscode/vsce package
    ```
 
-4. Package with `npx @vscode/vsce package` (or press `F5` in VS Code to launch an Extension Development Host).
+3. Open VS Code → **Extensions → Install from VSIX…** and choose the downloaded (or freshly built) package.
 
-After step 1 the binary lives in `%USERPROFILE%\.cargo\bin\dwg-cli.exe`, which is already on VS Code’s PATH. Unless you relocate it, leave `dwg.command` at the default (`dwg-cli`).
+After step 1 the binary lives in `%USERPROFILE%\.cargo\bin\dwg-cli.exe`, which is already on VS Code's PATH. Unless you relocate it, leave `dwg.command` at the default (`dwg-cli`).
 
 ## Dependencies
 Install the extension prerequisites before building. Matching versions keep results aligned with the CLI:

@@ -22,12 +22,7 @@ Copy–paste friendly steps for getting ToneGuard running everywhere:
 1. Install the CLI globally (run from any directory):
 
    ```bash
-   cargo install --git https://github.com/editnori/toneguard.git --tag v0.1.36 --bin dwg-cli --force
-   ```
-
-   Verify it’s on your PATH:
-
-   ```bash
+   cargo install dwg-cli --force
    dwg-cli --version
    ```
 
@@ -42,15 +37,9 @@ Copy–paste friendly steps for getting ToneGuard running everywhere:
 
 3. Install the VS Code extension once:
 
-   ```bash
-   git clone https://github.com/editnori/toneguard.git
-   cd toneguard/vscode-extension
-   npm install
-   npm run compile
-   npx @vscode/vsce package
-   ```
-
-   Open VS Code → **Extensions → Install from VSIX…** and pick the generated `toneguard-0.1.36.vsix`. After that the extension will find `dwg-cli` via your PATH in every workspace.
+   - Download the latest `toneguard-*.vsix` from the releases page (or build it yourself, see **Extension**).
+   - Open VS Code → **Extensions → Install from VSIX…** and pick the file.
+   - The extension shells out to the globally installed `dwg-cli`, so every workspace is ready to lint.
 
 Keep a copy of `layth-style.yml` in each repo (or set `dwg.configPath` to a shared location) so both the CLI and the extension load the rules you expect.
 
@@ -126,7 +115,7 @@ Install the resulting `toneguard-<version>.vsix` via "Extensions: Install from V
 ## CI usage
 
 ```bash
-cargo install --path cli --force
+cargo install dwg-cli --force
 dwg --strict docs/
 ```
 
