@@ -97,6 +97,33 @@ Running `dwg-cli --strict .` produces output like:
 
 ToneGuard helps spot these slogans so the final copy stays in plain, direct language.
 
+#### Fixed version
+After trimming the hype, the diff looks like:
+
+```diff
+-echo "Embarking on a groundbreaking journey to install dependencies that unlock unparalleled innovation!"
++echo "Installing dependencies..."
+
+-# Transformative Deployment Roadmap 🚀
+-
+-Our visionary, holistic platform seamlessly empowers interns, managers, and executives alike to unlock unprecedented velocity, consequence, and innovation all at once!!! Furthermore, we proactively evangelize best practices, consequently ensuring every audience enjoys a future-proof journey that delights, inspires, and revolutionizes their mindset.
++# Deployment checklist
++
++The deployment script installs packages and runs the smoke tests so the environment is ready before we ship.
+```
+
+Re-running `dwg-cli --strict .` now reports the files as clean.
+
+### Example: Repository hygiene issue
+ToneGuard also surfaces problems outside prose. If someone accidentally checks in a duplicate lockfile, a scan shows:
+
+```
+Repo checks:
+  - ./services/api/package-lock.json and ./services/api/yarn.lock both present (`services/api/package-lock.json` vs `services/api/yarn.lock`)
+```
+
+Removing the redundant lockfile (or adding it to `.gitignore`) resolves the warning. These repo-level diagnostics catch common AI-agent slipups like duplicate build artifacts, slop file variants, or banned directories before they land in main.
+
 ## Dependencies
 Install the following tools before building. They match the workspace's tested toolchain:
 - Rust 1.75+ for the workspace.
