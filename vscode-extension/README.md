@@ -20,6 +20,15 @@ The ToneGuard VS Code extension shells out to the `dwg-cli` binary and surfaces 
 
 After step 1 the binary lives in `%USERPROFILE%\.cargo\bin\dwg-cli.exe`, which is already on VS Code's PATH. Unless you relocate it, leave `dwg.command` at the default (`dwg-cli`).
 
+### Useful CLI commands
+ToneGuard runs the same binary the extension invokes, so you can script the CLI alongside editor usage:
+
+- `dwg-cli --config layth-style.yml --strict .` – full workspace lint with repo hygiene.
+- `dwg-cli --json --config layth-style.yml README.md` – machine-readable output for a single file.
+- `dwg-cli comments src/ --config layth-style.yml` – comment hygiene report (add `--strip` to delete eligible comments).
+- `dwg-cli --profile readme --only structure,marketing README.md` – force a profile and limit categories.
+- `dwg-cli --no-repo-checks docs/` – skip repo hygiene when you only want document diagnostics.
+
 ## Dependencies
 Install the extension prerequisites before building. Matching versions keep results aligned with the CLI:
 - Node.js 18+ and npm.

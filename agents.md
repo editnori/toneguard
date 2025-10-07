@@ -1,4 +1,4 @@
-# Release Checklist for Contributors
+﻿# Release checklist for contributors
 
 Whenever you cut a new ToneGuard release (tag and VSIX), make sure you also publish both Rust crates so the global `cargo install dwg-cli` flow keeps working.
 
@@ -15,4 +15,6 @@ Whenever you cut a new ToneGuard release (tag and VSIX), make sure you also publ
    ```
 4. Package and upload the VSIX to the marketplaces.
 
-Skip step 3 only if the crate version already exists on crates.io. Otherwise the extension’s global install path will break.
+Skip step 3 only if the crate version already exists on crates.io. Otherwise the extensionâ€™s global install path will break.
+
+

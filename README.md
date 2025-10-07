@@ -1,4 +1,4 @@
-# ToneGuard
+﻿# ToneGuard
 ToneGuard keeps team docs grounded in plain language. It spots the marketing fluff and rigid transitions that slip into Markdown or text files after heavy editing.
 
 ## Overview
@@ -17,7 +17,7 @@ ToneGuard is organised as a Cargo workspace with the following packages:
 Each crate shares a single version and configuration so updates stay consistent.
 
 ## Quickstart
-Copy–paste friendly steps for getting ToneGuard running everywhere:
+Copy'paste friendly steps for getting ToneGuard running everywhere:
 
 1. Install the CLI globally (run from any directory):
 
@@ -33,15 +33,34 @@ Copy–paste friendly steps for getting ToneGuard running everywhere:
    dwg-cli --config layth-style.yml --strict .
    ```
 
-   If the repo doesn’t already have a config, copy `layth-style.yml` from this project or point `--config` at a shared copy.
+   If the repo doesnt already have a config, copy `layth-style.yml` from this project or point `--config` at a shared copy.
 
 3. Install the VS Code extension once:
 
    - Download the latest `toneguard-*.vsix` from the releases page (or build it yourself, see **Extension**).
-   - Open VS Code → **Extensions → Install from VSIX…** and pick the file.
+   - Open VS Code ' **Extensions ' Install from VSIX** and pick the file.
    - The extension shells out to the globally installed `dwg-cli`, so every workspace is ready to lint.
 
 Keep a copy of `layth-style.yml` in each repo (or set `dwg.configPath` to a shared location) so both the CLI and the extension load the rules you expect.
+
+## CLI command reference
+Common invocations you can drop into any repository:
+
+- Full lint with repo hygiene:\
+  `dwg-cli --config layth-style.yml --strict .`
+- Quiet JSON output (pipe into jq or CI tooling):\
+  `dwg-cli --config layth-style.yml --json --strict .`
+- Focus on a single profile or path:\
+  `dwg-cli --profile readme README.md`
+- Enable / disable categories on the fly:\
+  `dwg-cli --only structure,marketing docs/README.md`\
+  `dwg-cli --disable transition,buzzword notes/*.md`
+- Skip repo checks when you only care about document lint:\
+  `dwg-cli --no-repo-checks ./docs`
+- Comment hygiene mode (report):\
+  `dwg-cli comments src/ --config layth-style.yml`
+- Comment hygiene mode (strip eligible comments):\
+  `dwg-cli comments src/ --config layth-style.yml --strip`
 
 ## Dependencies
 Install the following tools before building. They match the workspace's tested toolchain:
@@ -132,7 +151,11 @@ dwg comments --strip
 Tune ratios and allow lists through `comment_policy` before running destructive operations.
 
 ## License
-ToneGuard is licensed under the MIT License. See `LICENSE` for full terms.
+ToneGuard is licensed under the MIT License. See `LICENSE` for full terms. The MIT terms allow commercial and open-source redistribution so long as you include the original copyright and license text.
 
 ## Contributing
 Open an issue or submit a pull request with a focused change set. Run the linters and tests before sending patches.
+
+
+
+
