@@ -17,9 +17,22 @@ ToneGuard is organised as a Cargo workspace with the following packages:
 Each crate shares a single version and configuration so updates stay consistent.
 
 ## Quickstart
-1. Install Rust stable and clone this repository.
-2. Run `cargo run -p dwg-cli -- examples/sample.md` to lint a document.
-3. Add `--json` or `--strict` when you need machine-readable output or hard failures.
+1. Install Rust stable (if you haven't already).
+2. Install the CLI once; it then works from any repo on your machine:
+
+   ```bash
+   cargo install --git https://github.com/editnori/toneguard.git --tag v0.1.36 --bin dwg-cli --force
+   ```
+
+3. Lint any project by running `dwg-cli` from that repo (no source checkout required):
+
+   ```bash
+   dwg-cli --config layth-style.yml --strict .
+   ```
+
+4. Install the VS Code extension via **Extensions → Install from VSIX…** and choose `vscode-extension/toneguard-0.1.36.vsix`. The extension launches `dwg-cli` from your PATH, so the single install in step 2 covers every workspace.
+
+Keep a copy of `layth-style.yml` in each repo (or point `dwg.configPath` to a shared location) so the CLI and extension pick up your preferred rules.
 
 ## Dependencies
 Install the following tools before building. They match the workspace's tested toolchain:

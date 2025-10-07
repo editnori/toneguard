@@ -4,16 +4,13 @@
 The ToneGuard VS Code extension shells out to the `dwg-cli` binary and surfaces deterministic writing diagnostics inside the editor. It mirrors the CLI rules so Markdown and plain-text files receive the same feedback without leaving VS Code.
 
 ## Quickstart
-1. Install the CLI with `cargo install --path cli --force` or point to an existing binary in your PATH.
+1. Install the CLI globally (once per machine):  
+   `cargo install --git https://github.com/editnori/toneguard.git --tag v0.1.36 --bin dwg-cli --force`
 2. Run `npm install` inside `vscode-extension/`.
 3. Execute `npm run compile` to build the TypeScript sources.
 4. Package with `npx @vscode/vsce package` or press `F5` to launch an Extension Development Host.
 
-```bash
-npm install
-npm run compile
-npx @vscode/vsce package
-```
+After step 1 the binary lives in `%USERPROFILE%\.cargo\bin\dwg-cli.exe`, which is already on VS Code’s PATH. Unless you relocate it, leave `dwg.command` at the default (`dwg-cli`).
 
 ## Dependencies
 Install the extension prerequisites before building. Matching versions keep results aligned with the CLI:
