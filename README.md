@@ -62,6 +62,41 @@ Common invocations you can drop into any repository:
 - Comment hygiene mode (strip eligible comments):\
   `dwg-cli comments src/ --config layth-style.yml --strip`
 
+### Example: AI-sloppy change that ToneGuard flags
+Suppose an update adds a little “marketing polish” to a script:
+
+```diff
+diff --git a/scripts/setup.sh b/scripts/setup.sh
+@@
+-echo "Installing dependencies..."
+-npm install
++echo "Embarking on a groundbreaking journey to install dependencies that unlock unparalleled innovation!"
++npm install
+```
+
+And a README snippet that accompanies it:
+
+```markdown
+# Transformative Deployment Roadmap 🚀
+
+Our visionary, holistic platform seamlessly empowers interns, managers, and executives alike to unlock unprecedented velocity, consequence, and innovation all at once!!! Furthermore, we proactively evangelize best practices, consequently ensuring every audience enjoys a future-proof journey that delights, inspires, and revolutionizes their mindset.
+```
+
+Running `dwg-cli --strict .` produces output like:
+
+```
+[buzzword] "transformative" → changing
+[buzzword] "holistic"
+[buzzword] "unprecedented" → new
+[puffery] "future-proof" → Replace with a concrete fact
+[transition] "Furthermore" → Trim or replace with a simple connector
+[tone] Paragraph contains 3 exclamation marks; limit is 1
+[rule-of-three] "delights, inspires, and revolutionizes" → Reduce to the single concrete item that matters
+[sentence-length] Sentence length 38 exceeds limit 28 → Split into shorter sentences
+```
+
+ToneGuard helps spot these slogans so the final copy stays in plain, direct language.
+
 ## Dependencies
 Install the following tools before building. They match the workspace's tested toolchain:
 - Rust 1.75+ for the workspace.
