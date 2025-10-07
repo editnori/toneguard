@@ -1,7 +1,7 @@
 [package]
 name = "dwg-core"
 edition = "2021"
-version = "0.1.32"
+version = "0.1.33"
 
 [lib]
 name = "dwg_core"

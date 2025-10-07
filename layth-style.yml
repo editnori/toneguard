@@ -1,4 +1,4 @@
-version: 0.1.32
+version: 0.1.33
 heading_style: sentence-case
 quote_style: straight
 limits:
@@ -364,6 +364,23 @@ profiles:
         - rate limit
         - version
         - deprecation
+repo_rules:
+  ignore_globs:
+    - "vendor/**"
+    - "third_party/**"
+    - "node_modules/**"
+    - "**/node_modules/**"
+    - "**/*.min.*"
+    - "dist/**"
+    - "build/**"
+    - "**/dist/**"
+    - "**/build/**"
+    - "**/.git/**"
+    - "target/**"
+    - "**/target/**"
+    - "**/out/**"
+    - "**/coverage/**"
+    - "**/.idea/**"
 comment_policy:
   enabled: false
   max_ratio: 0.05

@@ -291,6 +291,13 @@ impl Default for RepoRules {
                 "build/**".into(),
                 "**/.git/**".into(),
                 "target/**".into(),
+                "**/node_modules/**".into(),
+                "**/dist/**".into(),
+                "**/build/**".into(),
+                "**/target/**".into(),
+                "**/out/**".into(),
+                "**/coverage/**".into(),
+                "**/.idea/**".into(),
             ],
             slop_globs: vec![
                 "**/*copy*".into(),
