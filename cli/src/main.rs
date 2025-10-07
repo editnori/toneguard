@@ -747,18 +747,29 @@ fn run_repo_checks(
         let _ = issue;
     } // keep borrow checker calm for future reuse
     for base in &bases {
-        for entry in WalkDir::new(&base) {
-            let entry = match entry {
+        let mut walker = WalkDir::new(&base).into_iter();
+        while let Some(entry_res) = walker.next() {
+            let entry = match entry_res {
                 Ok(e) => e,
                 Err(_) => continue,
             };
-            if !entry.file_type().is_file() {
-                continue;
-            }
             let rel = entry
                 .path()
                 .strip_prefix(config_root)
                 .unwrap_or_else(|_| entry.path());
+            if ignore_set
+                .as_ref()
+                .map(|set| set.is_match(rel))
+                .unwrap_or(false)
+            {
+                if entry.file_type().is_dir() {
+                    walker.skip_current_dir();
+                }
+                continue;
+            }
+            if !entry.file_type().is_file() {
+                continue;
+            }
             let dir = rel
                 .parent()
                 .map(|p| p.to_string_lossy().replace('\\', "/"))

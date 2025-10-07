@@ -1,89 +1,116 @@
 # ToneGuard
-ToneGuard scans Markdown and plain-text documentation for stylistic tics that commonly appear in large language model prose. It flags puffery, buzzwords, over-formal transitions, marketing clichés, negative parallelism, rule-of-three lists, connector overload, template conclusions, and other AI tells while protecting Layth’s direct, lowercase-forward voice. The latest pass also enforces document structure (required headings per doc type), blocks rhetorical/question headings, limits bullet sprawl, and surfaces repo-level slop such as duplicate lockfiles, suspicious filename variants, and giant JSON dumps.
+ToneGuard keeps team docs grounded in plain language. It spots the marketing fluff and rigid transitions that slip into Markdown or text files after heavy editing.
+
+## Overview
+ToneGuard scans Markdown and plain-text documentation for hallmarks of AI-authored prose. It flags puffery, buzzwords, stiff transitions, and template conclusions while keeping Layth's direct voice intact.
+
+The workspace ships a Rust analysis core, a CLI for local or CI runs, and a VS Code extension that reuses the CLI for live diagnostics.
 
 ## Components
+ToneGuard is organised as a Cargo workspace with the following packages:
 
-- `core/`: Rust library with deterministic parsing heuristics and configurable rules.
-- `cli/`: Command-line entry point for humans and CI pipelines.
-- `vscode-extension/`: VS Code scaffold that shells out to the CLI for live diagnostics.
-- `layth-style.yml`: Default configuration tuned to Layth’s writing patterns.
+- `core/`: deterministic parser and rule engine.
+- `cli/`: dwg CLI wrapper for local runs and CI pipelines.
+- `vscode-extension/`: VS Code extension that shells out to the CLI.
+- `layth-style.yml`: default rule set tuned for this repository.
 
-## Quick start
+Each crate shares a single version and configuration so updates stay consistent.
 
-```bash
-cargo run -p dwg-cli -- examples/sample.md
-```
+## Quickstart
+1. Install Rust stable and clone this repository.
+2. Run `cargo run -p dwg-cli -- examples/sample.md` to lint a document.
+3. Add `--json` or `--strict` when you need machine-readable output or hard failures.
 
-The CLI reports AI-style detections, category counts, and a density score (flags per 100 words). Use `--json` for machine-readable output (now including `repo_issues`) consumed by the VS Code extension or CI pipelines. Repository slop warnings (duplicate lockfiles, banned directories, suspicious filenames, oversized JSON/YAML) are printed up front.
+## Dependencies
+Install the following tools before building. They match the workspace's tested toolchain:
+- Rust 1.75+ for the workspace.
+- Node.js 18+ and npm for the VS Code extension build.
+- `@vscode/vsce` when packaging a VSIX.
 
 ## Configuration
+Override behaviour through `layth-style.yml`. Each section targets a specific area.
 
-Rules, thresholds, and whitelists live in `layth-style.yml`. The defaults include expanded buzzword throttles, dedicated transition throttles, and hard bans for marketing clichés and puffery. Files can locally disable checks via:
+### Style safeguards
+These keys throttle phrasing that sounds inflated. Adjust them when a document needs to allow a specific term:
+- `buzzwords.throttle`: throttles marketing-heavy verbs and adjectives.
+- `transitions.throttle`: limits formal connectors such as "however".
+- `puffery.ban` and `marketing_cliches.ban`: block stock promotional copy.
 
-```markdown
-<!-- dwg:off -->
-verbatim text or quotes
-<!-- dwg:on -->
-```
+### Structural controls
+These settings enforce shape and hygiene:
+- `profile_defaults`: sets baseline limits for sentence length and cadence checks.
+- `profiles`: applies per-glob overrides for README files and other templates such as RFCs or tickets.
+- `repo_rules`: runs a hygiene sweep covering ignore globs, duplicate lockfiles, suspicious filenames, and oversized JSON or YAML.
+- `comment_policy`: enforces optional ratios for TODO and FIXME comments with allow and ignore globs.
 
-Key sections of the YAML:
-
-- `buzzwords.throttle`: verbs, adjectives, and jargon that should appear rarely.
-- `transitions.throttle`: essay-style connectors (e.g. “furthermore”, “consequently”).
-- `puffery.ban` / `marketing_cliches.ban`: phrases that nearly always oversell.
-- `templates.ban`: regexes for boilerplate openers and negative parallelism.
-- `weasel.ban`: vague attributions and hedged qualifiers.
-- `profile_defaults`: baseline structural limits (sentence length, cadence, duplicate sentences, CTA phrases, broad terms, question leads, exclamation density).
-- `profiles`: per-glob overrides (required sections, heading caps, custom template phrases, term bans) for READMEs, tickets, RFCs, ADRs, postmortems, changelogs, and API docs.
-- `repo_rules`: repo-wide hygiene (ignore globs, slop glob patterns, banned directories, suspicious filename regexes, large JSON/YAML caps, duplicate lockfile detection).
-- `comment_policy`: repo-wide comment hygiene (max ratios, ignore/allow globs).
+Wrap verbatim text with the dwg comment fence (HTML comments named `dwg:off` and `dwg:on`) when a section must bypass the lint.
 
 ## Repo hygiene
+Repo checks run before document linting and surface deterministic issues:
 
-`repo_rules` drive deterministic slop checks before per-file linting. By default ToneGuard warns when it spots:
+- banned directories or files such as `__pycache__/`, `.idea/`, or `.DS_Store`
+- duplicate lockfiles (`package-lock.json` next to `yarn.lock`)
+- oversized structured files outside fixture folders
+- slop paths that resemble `copy`, `final`, or similar variants
 
-- banned directories/files like `__pycache__/`, `.DS_Store`, `.idea/`, `Thumbs.db`
-- suspicious filenames (`*_copy`, `*_final`, `cleanup_script.py`, etc.)
-- both `package-lock.json` and `yarn.lock` in the same package
-- JSON/YAML blobs over 500KB outside fixtures/data folders
-
-Customise glob allow/ban lists in `layth-style.yml` to match your repos. Repo warnings appear in both human output and the JSON `repo_issues` array.
+Adjust the ignore and allow lists in `layth-style.yml` if your project needs exemptions.
 
 ## CLI flags
-
-Examples:
+Common combinations:
 
 ```bash
-dwg --only structure,marketing --profile readme --set profile_defaults.min_sentences_per_section=2 README.md
-dwg --disable transition,buzzword --no-repo-checks docs/
-dwg --only-repo stray-markdown,dup-variants -- json
+dwg --profile readme --only structure,marketing README.md
+dwg --disable transition,buzzword docs/
+dwg --no-repo-checks --only-repo stray-markdown,dup-variants .
 ```
 
-- `--profile <name>` force a profile for all files
-- `--only/--enable/--disable <cat[,cat]>` filter categories
-- `--set key=value` apply overrides (e.g., `profile_defaults.min_code_blocks=1`)
-- `--no-repo-checks`, `--only-repo/--enable-repo/--disable-repo`
+Additional options include:
+- `--set key=value` for ad-hoc overrides such as `profile_defaults.min_sentences_per_section=2`.
+- `--enable` and `--disable` to toggle categories without editing the config.
+- Repo-level flags help focus the hygiene sweep. Use `--only-repo` to restrict categories and `--disable-repo` when you want a quiet pass.
+
+## Running tests
+Use the standard workspace commands:
+
+```bash
+cargo fmt
+cargo test
+npm install --prefix vscode-extension
+npm run compile --prefix vscode-extension
+```
 
 ## Extension
+Build the VS Code extension after installing dependencies:
 
-`vscode-extension/` contains a Node/TypeScript extension that spawns the CLI on save (debounced) and streams diagnostics into VS Code. Install deps with `npm install`, build the CLI, run `npm run compile`, then package with `npx @vscode/vsce package`.
+```bash
+npm install --prefix vscode-extension
+npm run compile --prefix vscode-extension
+npx @vscode/vsce package --prefix vscode-extension
+```
+
+Install the resulting `toneguard-<version>.vsix` via "Extensions: Install from VSIX...".
 
 ## CI usage
 
 ```bash
 cargo install --path cli --force
-dwg lint docs/ --strict
+dwg --strict docs/
 ```
 
-`--strict` forces non-zero exit when the density exceeds the warning threshold, keeping pull requests honest.
+Use `--strict` in CI to enforce non-zero exits when densities cross the warning threshold.
 
 ## Comment hygiene
-
-ToneGuard can audit and optionally strip code comments:
+ToneGuard can audit and strip code comments when needed:
 
 ```bash
 dwg comments src/ --config layth-style.yml
-dwg comments --strip            # remove full-line comments where allowed
+dwg comments --strip
 ```
 
-Use `comment_policy` in the YAML to tune ratios and ignore/allow globs before running. Keywords now include `DIRTY` / “quick and dirty” markers, and `dwg comments --strip` respects ticket links when deciding whether to delete TODO/FIXME lines.
+Tune ratios and allow lists through `comment_policy` before running destructive operations.
+
+## License
+ToneGuard is licensed under the MIT License. See `LICENSE` for full terms.
+
+## Contributing
+Open an issue or submit a pull request with a focused change set. Run the linters and tests before sending patches.

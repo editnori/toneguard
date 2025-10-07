@@ -1,4 +1,4 @@
-version: 0.1.35
+version: 0.1.36
 heading_style: sentence-case
 quote_style: straight
 limits:
@@ -381,6 +381,10 @@ repo_rules:
     - "**/out/**"
     - "**/coverage/**"
     - "**/.idea/**"
+    - ".vscode"
+    - ".vscode/**"
+    - "**/.vscode"
+    - "**/.vscode/**"
 comment_policy:
   enabled: false
   max_ratio: 0.05

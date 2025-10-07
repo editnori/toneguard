@@ -147,7 +147,7 @@ dependencies = [
 
 [[package]]
 name = "dwg-cli"
-version = "0.1.35"
+version = "0.1.36"
 dependencies = [
  "anyhow",
  "clap",
@@ -164,7 +164,7 @@ dependencies = [
 
 [[package]]
 name = "dwg-core"
-version = "0.1.35"
+version = "0.1.36"
 dependencies = [
  "aho-corasick 0.7.20",
  "anyhow",
