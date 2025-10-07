@@ -1,4 +1,4 @@
-﻿# ToneGuard
+# ToneGuard
 ToneGuard keeps team docs grounded in plain language. It spots the marketing fluff and rigid transitions that slip into Markdown or text files after heavy editing.
 
 ## Overview
@@ -17,7 +17,7 @@ ToneGuard is organised as a Cargo workspace with the following packages:
 Each crate shares a single version and configuration so updates stay consistent.
 
 ## Quickstart
-Copy'paste friendly steps for getting ToneGuard running everywhere:
+Copy-paste friendly steps for getting ToneGuard running everywhere:
 
 1. Install the CLI globally (run from any directory):
 
@@ -33,12 +33,12 @@ Copy'paste friendly steps for getting ToneGuard running everywhere:
    dwg-cli --config layth-style.yml --strict .
    ```
 
-   If the repo doesnt already have a config, copy `layth-style.yml` from this project or point `--config` at a shared copy.
+   If the repo doesn't already have a config, copy `layth-style.yml` from this project or point `--config` at a shared copy.
 
 3. Install the VS Code extension once:
 
    - Download the latest `toneguard-*.vsix` from the releases page (or build it yourself, see **Extension**).
-   - Open VS Code ' **Extensions ' Install from VSIX** and pick the file.
+   - Open VS Code ? **Extensions ? Install from VSIX�** and pick the file.
    - The extension shells out to the globally installed `dwg-cli`, so every workspace is ready to lint.
 
 Keep a copy of `layth-style.yml` in each repo (or set `dwg.configPath` to a shared location) so both the CLI and the extension load the rules you expect.
@@ -61,86 +61,6 @@ Common invocations you can drop into any repository:
   `dwg-cli comments src/ --config layth-style.yml`
 - Comment hygiene mode (strip eligible comments):\
   `dwg-cli comments src/ --config layth-style.yml --strip`
-
-### Example: AI-sloppy change that ToneGuard flags
-Suppose an update adds a little “marketing polish” to a script:
-
-```diff
-diff --git a/scripts/setup.sh b/scripts/setup.sh
-@@
--echo "Installing dependencies..."
--npm install
-+echo "Embarking on a groundbreaking journey to install dependencies that unlock unparalleled innovation!"
-+npm install
-```
-
-And a README snippet that accompanies it:
-
-```markdown
-# Transformative Deployment Roadmap 🚀
-
-Our visionary, holistic platform seamlessly empowers interns, managers, and executives alike to unlock unprecedented velocity, consequence, and innovation all at once!!! Furthermore, we proactively evangelize best practices, consequently ensuring every audience enjoys a future-proof journey that delights, inspires, and revolutionizes their mindset.
-```
-
-Running `dwg-cli --strict .` produces output like:
-
-```
-[buzzword] "transformative" → changing
-[buzzword] "holistic"
-[buzzword] "unprecedented" → new
-[puffery] "future-proof" → Replace with a concrete fact
-[transition] "Furthermore" → Trim or replace with a simple connector
-[tone] Paragraph contains 3 exclamation marks; limit is 1
-[rule-of-three] "delights, inspires, and revolutionizes" → Reduce to the single concrete item that matters
-[sentence-length] Sentence length 38 exceeds limit 28 → Split into shorter sentences
-```
-
-ToneGuard helps spot these slogans so the final copy stays in plain, direct language.
-
-#### Fixed version
-After trimming the hype, the diff looks like:
-
-```diff
--echo "Embarking on a groundbreaking journey to install dependencies that unlock unparalleled innovation!"
-+echo "Installing dependencies..."
-
--# Transformative Deployment Roadmap 🚀
--
--Our visionary, holistic platform seamlessly empowers interns, managers, and executives alike to unlock unprecedented velocity, consequence, and innovation all at once!!! Furthermore, we proactively evangelize best practices, consequently ensuring every audience enjoys a future-proof journey that delights, inspires, and revolutionizes their mindset.
-+# Deployment checklist
-+
-+The deployment script installs packages and runs the smoke tests so the environment is ready before we ship.
-```
-
-Re-running `dwg-cli --strict .` now reports the files as clean.
-
-### Example: Repository hygiene issue
-ToneGuard also surfaces problems outside prose. If someone accidentally checks in a duplicate lockfile, a scan shows:
-
-```
-Repo checks:
-  - ./services/api/package-lock.json and ./services/api/yarn.lock both present (`services/api/package-lock.json` vs `services/api/yarn.lock`)
-```
-
-Removing the redundant lockfile (or adding it to `.gitignore`) resolves the warning. These repo-level diagnostics catch common AI-agent slipups like duplicate build artifacts, slop file variants, or banned directories before they land in main.
-
-Another common case is the “two versions of the same script” problem:
-
-```text
-$ tree scripts/
-scripts/
-├── deploy.sh
-└── deploy-final.sh
-```
-
-ToneGuard reports:
-
-```
-Repo checks:
-  - scripts/deploy.sh: Multiple variant files detected: scripts/deploy.sh → ["deploy-final.sh", "deploy.sh"]
-```
-
-Delete or rename the stray copy and re-run `dwg-cli --strict .` to clear the hygiene warning.
 
 ## Dependencies
 Install the following tools before building. They match the workspace's tested toolchain:
