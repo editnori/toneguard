@@ -12,7 +12,8 @@
   ],
   "activationEvents": [
     "onStartupFinished",
-    "onLanguage:markdown"
+    "onLanguage:markdown",
+    "onCommand:dwg.lintWorkspace"
   ],
   "main": "./out/extension.js",
   "repository": {
@@ -20,6 +21,13 @@
     "url": "https://github.com/editnori/toneguard"
   },
   "contributes": {
+    "commands": [
+      {
+        "command": "dwg.lintWorkspace",
+        "title": "ToneGuard: Lint Workspace",
+        "category": "ToneGuard"
+      }
+    ],
     "configuration": {
       "title": "Deterministic Writing Guard",
       "properties": {
