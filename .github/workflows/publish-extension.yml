@@ -6,6 +6,9 @@ on:
       - 'v*'  # Triggers on version tags like v0.1.39
   workflow_dispatch:  # Manual trigger option
 
+permissions:
+  contents: write  # Required for creating GitHub releases
+
 jobs:
   # Build binaries for each platform
   build-binaries:
