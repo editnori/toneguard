@@ -38,7 +38,7 @@ Copy-paste friendly steps for getting ToneGuard running everywhere:
 3. Install the VS Code extension once:
 
    - Download the latest `toneguard-*.vsix` from the releases page (or build it yourself, see **Extension**).
-   - Open VS Code ? **Extensions ? Install from VSIX…** and pick the file.
+   - Open VS Code ? **Extensions ? Install from VSIXï¿½** and pick the file.
    - The extension shells out to the globally installed `dwg-cli`, so every workspace is ready to lint.
 
 Keep a copy of `layth-style.yml` in each repo (or set `dwg.configPath` to a shared location) so both the CLI and the extension load the rules you expect.
@@ -65,7 +65,7 @@ Common invocations you can drop into any repository:
 ## Dependencies
 Install the following tools before building. They match the workspace's tested toolchain:
 - Rust 1.75+ for the workspace.
-- Node.js 18+ and npm for the VS Code extension build.
+- [Bun](https://bun.sh) (recommended) or Node.js 18+ for the VS Code extension build.
 - `@vscode/vsce` when packaging a VSIX.
 
 ## Configuration
@@ -116,17 +116,17 @@ Use the standard workspace commands:
 ```bash
 cargo fmt
 cargo test
-npm install --prefix vscode-extension
-npm run compile --prefix vscode-extension
+cd vscode-extension && bun install && bun run compile
 ```
 
 ## Extension
 Build the VS Code extension after installing dependencies:
 
 ```bash
-npm install --prefix vscode-extension
-npm run compile --prefix vscode-extension
-npx @vscode/vsce package --prefix vscode-extension
+cd vscode-extension
+bun install
+bun run compile
+bunx @vscode/vsce package
 ```
 
 Install the resulting `toneguard-<version>.vsix` via "Extensions: Install from VSIX...".

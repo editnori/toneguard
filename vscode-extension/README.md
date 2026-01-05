@@ -11,9 +11,9 @@ The ToneGuard VS Code extension connects to the `dwg-lsp` language server and su
    ```bash
    git clone https://github.com/editnori/toneguard.git
    cd toneguard/vscode-extension
-   npm install
-   npm run compile
-   npx @vscode/vsce package
+   bun install
+   bun run compile
+   bunx @vscode/vsce package
    ```
 
 3. Open VS Code → **Extensions → Install from VSIX…** and choose the downloaded (or freshly built) package.
@@ -30,8 +30,8 @@ The extension uses `dwg-lsp` for in-editor diagnostics. You can still script the
 - `dwg-cli --no-repo-checks docs/` – skip repo hygiene when you only want document diagnostics.
 
 ## Dependencies
-Install the extension prerequisites before building. Matching versions keep results aligned with the CLI:
-- Node.js 18+ and npm.
+Install the extension prerequisites before building:
+- [Bun](https://bun.sh) (recommended) or Node.js 18+.
 - Rust 1.75+ when you build the CLI locally.
 - `@vscode/vsce` for packaging a VSIX.
 
@@ -45,10 +45,10 @@ Tweak behaviour from VS Code settings or `settings.json`:
 Use the "ToneGuard: Lint Workspace" command to refresh diagnostics for open files.
 
 ## Running tests
-The extension reuses the CLI test suite. Run `cargo test` at the workspace root, then execute `npm run compile` inside `vscode-extension/` to ensure the TypeScript build succeeds.
+The extension reuses the CLI test suite. Run `cargo test` at the workspace root, then execute `bun run compile` inside `vscode-extension/` to ensure the TypeScript build succeeds.
 
 ## License
 This extension ships under the MIT License. See the repository `LICENSE` file for details.
 
 ## Contributing
-Open an issue or pull request with focused changes. Please run `cargo fmt`, `cargo test`, and `npm run compile` before submitting.
+Open an issue or pull request with focused changes. Please run `cargo fmt`, `cargo test`, and `bun run compile` before submitting.
