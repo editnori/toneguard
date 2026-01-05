@@ -2,7 +2,7 @@
   "name": "toneguard",
   "displayName": "ToneGuard",
   "description": "Zero-setup AI slop detection for Markdown. Highlights generic, AI-style writing patterns instantly.",
-  "version": "0.1.39",
+  "version": "0.1.40",
   "publisher": "editnori",
   "icon": "icon.png",
   "engines": {
