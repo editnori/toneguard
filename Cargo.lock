@@ -270,7 +270,7 @@ dependencies = [
 
 [[package]]
 name = "dwg-lsp"
-version = "0.1.39"
+version = "0.1.43"
 dependencies = [
  "anyhow",
  "dashmap 6.1.0",
