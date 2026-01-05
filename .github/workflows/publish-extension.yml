@@ -166,7 +166,7 @@ jobs:
 
       - name: Package extension
         working-directory: vscode-extension
-        run: bunx @vscode/vsce package --no-dependencies
+        run: bunx @vscode/vsce package
 
       - name: Show package size
         working-directory: vscode-extension
@@ -176,7 +176,7 @@ jobs:
         working-directory: vscode-extension
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
-        run: bunx @vscode/vsce publish --no-dependencies -p $VSCE_PAT
+        run: bunx @vscode/vsce publish -p $VSCE_PAT
 
       - name: Publish to OpenVSX
         working-directory: vscode-extension
