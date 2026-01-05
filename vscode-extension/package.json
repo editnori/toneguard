@@ -4,7 +4,7 @@
   "description": "Highlights AI-style writing patterns using the ToneGuard language server.",
   "version": "0.1.38",
   "publisher": "editnori",
-  "icon": "icon-minimal.svg",
+  "icon": "icon.png",
   "engines": {
     "vscode": "^1.86.0"
   },
@@ -40,7 +40,7 @@
         "dwg.configPath": {
           "type": "string",
           "default": "layth-style.yml",
-          "description": "Path to the DWG configuration file." 
+          "description": "Path to the DWG configuration file."
         },
         "dwg.debounceMs": {
           "type": "number",
@@ -144,7 +144,9 @@
         },
         "dwg.set": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "markdownDescription": "Override config values at runtime (e.g., `profile_defaults.min_sentences_per_section=2`). See README for keys."
         },
@@ -227,6 +229,7 @@
     "vscode-languageclient": "^9.0.1"
   },
   "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
     "@types/node": "^20.11.25",
     "@types/vscode": "^1.86.0",
     "eslint": "^8.56.0",
