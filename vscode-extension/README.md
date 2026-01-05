@@ -1,11 +1,11 @@
 ﻿# ToneGuard VS Code extension
 
 ## Overview
-The ToneGuard VS Code extension shells out to the `dwg-cli` binary and surfaces deterministic writing diagnostics inside the editor. It mirrors the CLI rules so Markdown and plain-text files receive the same feedback without leaving VS Code.
+The ToneGuard VS Code extension connects to the `dwg-lsp` language server and surfaces deterministic writing diagnostics inside the editor. It keeps the analyzer hot in memory, updates diagnostics on edits, and provides quick fixes like `<!-- dwg:ignore-line -->`.
 
 ## Quickstart
-1. Install the CLI globally (once per machine):  
-   `cargo install dwg-cli --force`
+1. Install the language server globally (once per machine):
+   `cargo install dwg-lsp --force`
 2. Grab the latest `toneguard-*.vsix` from the releases page, or build it yourself:
 
    ```bash
@@ -18,10 +18,10 @@ The ToneGuard VS Code extension shells out to the `dwg-cli` binary and surfaces 
 
 3. Open VS Code → **Extensions → Install from VSIX…** and choose the downloaded (or freshly built) package.
 
-After step 1 the binary lives in `%USERPROFILE%\.cargo\bin\dwg-cli.exe`, which is already on VS Code's PATH. Unless you relocate it, leave `dwg.command` at the default (`dwg-cli`).
+After step 1 the server binary lives in `%USERPROFILE%\.cargo\bin\dwg-lsp.exe`, which is already on VS Code's PATH. Unless you relocate it, leave `dwg.command` at the default (`dwg-lsp`).
 
 ### Useful CLI commands
-ToneGuard runs the same binary the extension invokes, so you can script the CLI alongside editor usage:
+The extension uses `dwg-lsp` for in-editor diagnostics. You can still script the CLI alongside editor usage:
 
 - `dwg-cli --config layth-style.yml --strict .` – full workspace lint with repo hygiene.
 - `dwg-cli --json --config layth-style.yml README.md` – machine-readable output for a single file.
@@ -37,12 +37,12 @@ Install the extension prerequisites before building. Matching versions keep resu
 
 ## Configuration
 Tweak behaviour from VS Code settings or `settings.json`:
-- `dwg.command`: absolute path to the `dwg-cli` binary.
+- `dwg.command`: absolute path to the `dwg-lsp` server binary.
 - `dwg.configPath`: repository-relative path to `layth-style.yml`.
-- `dwg.debounceMs`: delay before re-running the CLI after edits.
-- `dwg.noRepoChecks`: skip hygiene warnings when you only want document diagnostics.
+- `dwg.profile`: force a profile for all files (overrides glob matching).
+- `dwg.onlyCategories` / `dwg.enableCategories` / `dwg.disableCategories`: filter which categories are surfaced.
 
-Use the "ToneGuard: Lint Workspace" command to push diagnostics for every file without opening them individually.
+Use the "ToneGuard: Lint Workspace" command to refresh diagnostics for open files.
 
 ## Running tests
 The extension reuses the CLI test suite. Run `cargo test` at the workspace root, then execute `npm run compile` inside `vscode-extension/` to ensure the TypeScript build succeeds.

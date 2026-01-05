@@ -49,6 +49,8 @@ pub struct Limits {
     pub em_dashes_per_paragraph: usize,
     pub connectors_per_sentence: usize,
     pub rule_of_three_per_paragraph: usize,
+    pub bold_spans_per_paragraph: usize,
+    pub bold_lead_bullets_per_list: usize,
 }
 
 impl Default for Limits {
@@ -57,6 +59,8 @@ impl Default for Limits {
             em_dashes_per_paragraph: 1,
             connectors_per_sentence: 1,
             rule_of_three_per_paragraph: 0,
+            bold_spans_per_paragraph: 3,
+            bold_lead_bullets_per_list: 3,
         }
     }
 }
@@ -185,6 +189,11 @@ impl Default for BuzzwordConfig {
                 "unprecedented".into(),
                 "plethora".into(),
                 "empower".into(),
+                "comprehensive".into(),
+                "streamlined".into(),
+                "scalable".into(),
+                "actionable insights".into(),
+                "data-driven".into(),
             ],
         }
     }
@@ -406,6 +415,11 @@ impl Default for Config {
                     "significantly".into(),
                     "remarkably".into(),
                     "notably".into(),
+                    "additionally".into(),
+                    "in other words".into(),
+                    "on the other hand".into(),
+                    "in contrast".into(),
+                    "to summarize".into(),
                 ],
             },
             puffery: PhraseList {
@@ -467,6 +481,30 @@ impl Default for Config {
                     "\\baims to explore\\b".into(),
                     "\\btoday’s fast-paced world\\b".into(),
                     "\\btoday's fast-paced world\\b".into(),
+                    "(?m)^subject:".into(),
+                    "(?m)^re:".into(),
+                    "\\bas an ai language model\\b".into(),
+                    "\\bas a language model\\b".into(),
+                    "\\bmy (?:knowledge|training) (?:cutoff|cut-off)\\b".into(),
+                    "\\bi (?:do not|don't) have access\\b".into(),
+                    "\\bi (?:do not|don't) have the ability\\b".into(),
+                    "\\bi cannot access\\b".into(),
+                    "\\bi hope this helps\\b".into(),
+                    "\\blet me know if you have any questions\\b".into(),
+                    "\\bfeel free to reach out\\b".into(),
+                    "\\bin this (?:article|post)\\b".into(),
+                    "\\bthis (?:article|post) (?:covers|explores|will cover)\\b".into(),
+                    "\\blet's dive in\\b".into(),
+                    "\\bas technology continues to evolve\\b".into(),
+                    "\\bin an? ever-evolving (?:world|landscape|industry)\\b".into(),
+                    "\\bin the modern (?:world|era)\\b".into(),
+                    "\\bat the end of the day\\b".into(),
+                    "\\bthe following (?:section|sections) (?:covers|cover|will cover)\\b".into(),
+                    "\\bchallenges and opportunities\\b".into(),
+                    "\\bfuture (?:outlook|directions|prospects)\\b".into(),
+                    "\\bdespite these challenges\\b".into(),
+                    "\\blooking ahead\\b".into(),
+                    "\\bkey takeaways?\\b".into(),
                 ],
             },
             weasel: PhraseList {
@@ -478,6 +516,14 @@ impl Default for Config {
                     "it should be mentioned that".into(),
                     "it is worth considering that".into(),
                     "it could be suggested that".into(),
+                    "many experts believe".into(),
+                    "it is widely believed".into(),
+                    "it is often said".into(),
+                    "some would argue".into(),
+                    "various sources suggest".into(),
+                    "some sources say".into(),
+                    "research suggests".into(),
+                    "studies show".into(),
                 ],
             },
             marketing_cliches: PhraseList {
@@ -857,6 +903,15 @@ struct HeadingCapture {
     lower: String,
 }
 
+#[derive(Clone, Debug)]
+struct PhraseHit {
+    start: usize,
+    end: usize,
+    snippet: String,
+    suggestion: Option<String>,
+    sentence_idx: usize,
+}
+
 fn resolve_profile_recipe(
     name: &str,
     configs: &HashMap<String, ProfileConfig>,
@@ -944,6 +999,33 @@ impl std::fmt::Display for Category {
     }
 }
 
+fn parse_category(name: &str) -> Option<Category> {
+    let n = name.trim().to_lowercase();
+    match n.as_str() {
+        "puffery" => Some(Category::Puffery),
+        "buzzword" => Some(Category::Buzzword),
+        "negative-parallelism" | "negative-parallel" => Some(Category::NegativeParallel),
+        "rule-of-three" => Some(Category::RuleOfThree),
+        "connector-glut" => Some(Category::ConnectorGlut),
+        "template" => Some(Category::Template),
+        "weasel" => Some(Category::Weasel),
+        "transition" => Some(Category::Transition),
+        "marketing" => Some(Category::Marketing),
+        "structure" => Some(Category::Structure),
+        "call-to-action" | "cta" => Some(Category::CallToAction),
+        "sentence-length" => Some(Category::SentenceLength),
+        "repetition" => Some(Category::Repetition),
+        "cadence" => Some(Category::Cadence),
+        "confidence" => Some(Category::Confidence),
+        "broad-term" => Some(Category::BroadTerm),
+        "tone" => Some(Category::Tone),
+        "em-dash" | "emdash" => Some(Category::EmDash),
+        "formatting" => Some(Category::Formatting),
+        "quote-style" => Some(Category::QuoteStyle),
+        _ => None,
+    }
+}
+
 /// Location metadata in 1-based line/column coordinates.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Location {
@@ -951,10 +1033,42 @@ pub struct Location {
     pub column: usize,
 }
 
+/// Diagnostic severity levels matching LSP specification.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[serde(rename_all = "kebab-case")]
+pub enum Severity {
+    /// Hard slop signal - always flag
+    Error,
+    /// Likely slop - clustered patterns or strong signals
+    Warning,
+    /// Style suggestion - single soft signals
+    Hint,
+    /// Informational only
+    Information,
+}
+
+impl Default for Severity {
+    fn default() -> Self {
+        Severity::Warning
+    }
+}
+
+impl std::fmt::Display for Severity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Severity::Error => f.write_str("error"),
+            Severity::Warning => f.write_str("warning"),
+            Severity::Hint => f.write_str("hint"),
+            Severity::Information => f.write_str("info"),
+        }
+    }
+}
+
 /// Style diagnostic emitted by the analyzer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Diagnostic {
     pub category: Category,
+    pub severity: Severity,
     pub message: String,
     pub suggestion: Option<String>,
     pub location: Location,
@@ -1196,10 +1310,29 @@ impl Analyzer {
         let filtered = DisabledRanges::new(text);
         let mut diagnostics = Vec::new();
         let mut category_counts: BTreeMap<Category, usize> = BTreeMap::new();
+        let sentences = split_sentences_with_offset(text);
 
-        self.detect_puffery(text, &filtered, &mut diagnostics, &mut category_counts);
-        self.detect_buzzwords(text, &filtered, &mut diagnostics, &mut category_counts);
-        self.detect_transitions(text, &filtered, &mut diagnostics, &mut category_counts);
+        self.detect_puffery(
+            text,
+            &sentences,
+            &filtered,
+            &mut diagnostics,
+            &mut category_counts,
+        );
+        self.detect_buzzwords(
+            text,
+            &sentences,
+            &filtered,
+            &mut diagnostics,
+            &mut category_counts,
+        );
+        self.detect_transitions(
+            text,
+            &sentences,
+            &filtered,
+            &mut diagnostics,
+            &mut category_counts,
+        );
         self.detect_marketing(text, &filtered, &mut diagnostics, &mut category_counts);
         self.detect_templates(
             text,
@@ -1210,7 +1343,6 @@ impl Analyzer {
         );
         self.detect_ranges(text, &filtered, &mut diagnostics, &mut category_counts);
 
-        let sentences = split_sentences_with_offset(text);
         self.detect_connectors(
             text,
             &sentences,
@@ -1231,6 +1363,13 @@ impl Analyzer {
             &sentences,
             &filtered,
             profile,
+            &mut diagnostics,
+            &mut category_counts,
+        );
+        self.detect_mid_sentence_questions(
+            text,
+            &sentences,
+            &filtered,
             &mut diagnostics,
             &mut category_counts,
         );
@@ -1268,6 +1407,7 @@ impl Analyzer {
 
         self.detect_rule_of_three(text, &filtered, &mut diagnostics, &mut category_counts);
         self.detect_em_dash(text, &filtered, &mut diagnostics, &mut category_counts);
+        self.detect_bold_spans(text, &filtered, &mut diagnostics, &mut category_counts);
         self.detect_headings(
             text,
             &filtered,
@@ -1282,6 +1422,8 @@ impl Analyzer {
             &mut diagnostics,
             &mut category_counts,
         );
+        self.detect_emoji_bullets(text, &filtered, &mut diagnostics, &mut category_counts);
+        self.detect_bold_lead_bullets(text, &filtered, &mut diagnostics, &mut category_counts);
         self.detect_call_to_action(
             text,
             &filtered,
@@ -1291,6 +1433,7 @@ impl Analyzer {
         );
         self.detect_confidence(
             text,
+            &sentences,
             &filtered,
             profile,
             &mut diagnostics,
@@ -1311,8 +1454,20 @@ impl Analyzer {
             &mut diagnostics,
             &mut category_counts,
         );
-        self.detect_min_code_blocks(text, profile, &mut diagnostics, &mut category_counts);
-        self.detect_required_patterns(text, profile, &mut diagnostics, &mut category_counts);
+        self.detect_min_code_blocks(
+            text,
+            &filtered,
+            profile,
+            &mut diagnostics,
+            &mut category_counts,
+        );
+        self.detect_required_patterns(
+            text,
+            &filtered,
+            profile,
+            &mut diagnostics,
+            &mut category_counts,
+        );
         self.detect_forbidden_patterns(
             text,
             &filtered,
@@ -1321,6 +1476,13 @@ impl Analyzer {
             &mut category_counts,
         );
         self.detect_quotes(text, &filtered, &mut diagnostics, &mut category_counts);
+        self.detect_statistical_slop(
+            text,
+            &sentences,
+            &filtered,
+            &mut diagnostics,
+            &mut category_counts,
+        );
 
         let word_count = count_words(text);
 
@@ -1335,13 +1497,17 @@ impl Analyzer {
     fn detect_puffery(
         &self,
         text: &str,
+        sentences: &[(String, usize)],
         filtered: &DisabledRanges,
         diagnostics: &mut Vec<Diagnostic>,
         counts: &mut BTreeMap<Category, usize>,
     ) {
         if let Some(matcher) = &self.puffery_matcher {
             for mat in matcher.find_iter(text.as_bytes()) {
-                if filtered.is_disabled(mat.start()) {
+                if filtered.is_category_disabled(mat.start(), Category::Puffery) {
+                    continue;
+                }
+                if !has_word_boundary(text, mat.start(), mat.end()) {
                     continue;
                 }
                 let snippet = slice_snippet(text, mat.start(), mat.end());
@@ -1349,8 +1515,12 @@ impl Analyzer {
                     continue;
                 }
                 let location = byte_to_location(text, mat.start());
+                if filtered.is_line_ignored(location.line) {
+                    continue;
+                }
                 diagnostics.push(Diagnostic {
                     category: Category::Puffery,
+                    severity: Severity::Error,
                     message: format!("Puffery phrase detected: `{snippet}`"),
                     suggestion: Some("Replace with a concrete fact.".into()),
                     location,
@@ -1363,16 +1533,28 @@ impl Analyzer {
 
         if let Some(matcher) = &self.weasel_matcher {
             for mat in matcher.find_iter(text.as_bytes()) {
-                if filtered.is_disabled(mat.start()) {
+                if filtered.is_category_disabled(mat.start(), Category::Weasel) {
+                    continue;
+                }
+                if !has_word_boundary(text, mat.start(), mat.end()) {
                     continue;
                 }
                 let snippet = slice_snippet(text, mat.start(), mat.end());
                 if self.allow_phrase_set.contains(&snippet.to_lowercase()) {
                     continue;
                 }
+                let sentence_idx =
+                    sentence_index_for_offset(sentences, mat.start()).unwrap_or(usize::MAX);
+                if sentence_idx != usize::MAX && sentence_has_citation(&sentences[sentence_idx].0) {
+                    continue;
+                }
                 let location = byte_to_location(text, mat.start());
+                if filtered.is_line_ignored(location.line) {
+                    continue;
+                }
                 diagnostics.push(Diagnostic {
                     category: Category::Weasel,
+                    severity: Severity::Warning,
                     message: format!("Vague attribution: `{snippet}`"),
                     suggestion: Some("Name the specific source or remove.".into()),
                     location,
@@ -1387,13 +1569,18 @@ impl Analyzer {
     fn detect_buzzwords(
         &self,
         text: &str,
+        sentences: &[(String, usize)],
         filtered: &DisabledRanges,
         diagnostics: &mut Vec<Diagnostic>,
         counts: &mut BTreeMap<Category, usize>,
     ) {
         if let Some(matcher) = &self.buzzword_matcher {
+            let mut hits: Vec<PhraseHit> = Vec::new();
             for mat in matcher.find_iter(text.as_bytes()) {
-                if filtered.is_disabled(mat.start()) {
+                if filtered.is_category_disabled(mat.start(), Category::Buzzword) {
+                    continue;
+                }
+                if !has_word_boundary(text, mat.start(), mat.end()) {
                     continue;
                 }
                 let snippet = slice_snippet(text, mat.start(), mat.end());
@@ -1401,16 +1588,54 @@ impl Analyzer {
                     continue;
                 }
                 let suggestion = replacement_for(&snippet.to_lowercase());
-                let location = byte_to_location(text, mat.start());
-                diagnostics.push(Diagnostic {
-                    category: Category::Buzzword,
-                    message: format!("Buzzword detected: `{snippet}`"),
-                    suggestion,
-                    location,
-                    span: (mat.start(), mat.end()),
+                let sentence_idx =
+                    sentence_index_for_offset(sentences, mat.start()).unwrap_or(usize::MAX);
+                hits.push(PhraseHit {
+                    start: mat.start(),
+                    end: mat.end(),
                     snippet,
+                    suggestion,
+                    sentence_idx,
                 });
-                *counts.entry(Category::Buzzword).or_default() += 1;
+            }
+            if hits.is_empty() {
+                return;
+            }
+            let mut grouped: HashMap<usize, Vec<PhraseHit>> = HashMap::new();
+            for hit in hits {
+                grouped.entry(hit.sentence_idx).or_default().push(hit);
+            }
+            for (sentence_idx, group) in grouped {
+                let has_specifics = if sentence_idx != usize::MAX {
+                    sentence_has_specifics(&sentences[sentence_idx].0)
+                } else {
+                    false
+                };
+                if has_specifics && group.len() == 1 {
+                    continue;
+                }
+                let group_len = group.len();
+                for hit in group {
+                    let location = byte_to_location(text, hit.start);
+                    if filtered.is_line_ignored(location.line) {
+                        continue;
+                    }
+                    let sev = if group_len >= 2 {
+                        Severity::Warning
+                    } else {
+                        Severity::Hint
+                    };
+                    diagnostics.push(Diagnostic {
+                        category: Category::Buzzword,
+                        severity: sev,
+                        message: format!("Buzzword detected: `{}`", hit.snippet),
+                        suggestion: hit.suggestion.clone(),
+                        location,
+                        span: (hit.start, hit.end),
+                        snippet: hit.snippet.clone(),
+                    });
+                    *counts.entry(Category::Buzzword).or_default() += 1;
+                }
             }
         }
     }
@@ -1418,29 +1643,72 @@ impl Analyzer {
     fn detect_transitions(
         &self,
         text: &str,
+        sentences: &[(String, usize)],
         filtered: &DisabledRanges,
         diagnostics: &mut Vec<Diagnostic>,
         counts: &mut BTreeMap<Category, usize>,
     ) {
         if let Some(matcher) = &self.transition_matcher {
+            let mut hits: Vec<PhraseHit> = Vec::new();
             for mat in matcher.find_iter(text.as_bytes()) {
-                if filtered.is_disabled(mat.start()) {
+                if filtered.is_category_disabled(mat.start(), Category::Transition) {
+                    continue;
+                }
+                if !has_word_boundary(text, mat.start(), mat.end()) {
                     continue;
                 }
                 let snippet = slice_snippet(text, mat.start(), mat.end());
                 if self.allow_phrase_set.contains(&snippet.to_lowercase()) {
                     continue;
                 }
-                let location = byte_to_location(text, mat.start());
-                diagnostics.push(Diagnostic {
-                    category: Category::Transition,
-                    message: format!("Transitional filler detected: `{snippet}`"),
-                    suggestion: Some("Trim or replace with a simple connector.".into()),
-                    location,
-                    span: (mat.start(), mat.end()),
+                let sentence_idx =
+                    sentence_index_for_offset(sentences, mat.start()).unwrap_or(usize::MAX);
+                hits.push(PhraseHit {
+                    start: mat.start(),
+                    end: mat.end(),
                     snippet,
+                    suggestion: Some("Trim or replace with a simple connector.".into()),
+                    sentence_idx,
                 });
-                *counts.entry(Category::Transition).or_default() += 1;
+            }
+            if hits.is_empty() {
+                return;
+            }
+            let mut grouped: HashMap<usize, Vec<PhraseHit>> = HashMap::new();
+            for hit in hits {
+                grouped.entry(hit.sentence_idx).or_default().push(hit);
+            }
+            for (sentence_idx, group) in grouped {
+                let has_specifics = if sentence_idx != usize::MAX {
+                    sentence_has_specifics(&sentences[sentence_idx].0)
+                } else {
+                    false
+                };
+                if has_specifics && group.len() == 1 {
+                    continue;
+                }
+                let group_len = group.len();
+                for hit in group {
+                    let location = byte_to_location(text, hit.start);
+                    if filtered.is_line_ignored(location.line) {
+                        continue;
+                    }
+                    let sev = if group_len >= 2 {
+                        Severity::Warning
+                    } else {
+                        Severity::Hint
+                    };
+                    diagnostics.push(Diagnostic {
+                        category: Category::Transition,
+                        severity: sev,
+                        message: format!("Transitional filler detected: `{}`", hit.snippet),
+                        suggestion: hit.suggestion.clone(),
+                        location,
+                        span: (hit.start, hit.end),
+                        snippet: hit.snippet.clone(),
+                    });
+                    *counts.entry(Category::Transition).or_default() += 1;
+                }
             }
         }
     }
@@ -1454,7 +1722,10 @@ impl Analyzer {
     ) {
         if let Some(matcher) = &self.marketing_matcher {
             for mat in matcher.find_iter(text.as_bytes()) {
-                if filtered.is_disabled(mat.start()) {
+                if filtered.is_category_disabled(mat.start(), Category::Marketing) {
+                    continue;
+                }
+                if !has_word_boundary(text, mat.start(), mat.end()) {
                     continue;
                 }
                 let snippet = slice_snippet(text, mat.start(), mat.end());
@@ -1462,8 +1733,12 @@ impl Analyzer {
                     continue;
                 }
                 let location = byte_to_location(text, mat.start());
+                if filtered.is_line_ignored(location.line) {
+                    continue;
+                }
                 diagnostics.push(Diagnostic {
                     category: Category::Marketing,
+                    severity: Severity::Error,
                     message: format!("Marketing cliché detected: `{snippet}`"),
                     suggestion: Some("Swap for factual language.".into()),
                     location,
@@ -1489,9 +1764,6 @@ impl Analyzer {
         ];
         for regex in iterators.into_iter().flatten() {
             for mat in regex.find_iter(text) {
-                if filtered.is_disabled(mat.start()) {
-                    continue;
-                }
                 let snippet = slice_snippet(text, mat.start(), mat.end());
                 if self.allow_phrase_set.contains(&snippet.to_lowercase()) {
                     continue;
@@ -1501,9 +1773,16 @@ impl Analyzer {
                 } else {
                     Category::Template
                 };
+                if filtered.is_category_disabled(mat.start(), cat) {
+                    continue;
+                }
                 let location = byte_to_location(text, mat.start());
+                if filtered.is_line_ignored(location.line) {
+                    continue;
+                }
                 diagnostics.push(Diagnostic {
                     category: cat,
+                    severity: Severity::Error,
                     message: format!("Template phrasing detected: `{snippet}`"),
                     suggestion: Some("Rewrite with direct language.".into()),
                     location,
@@ -1524,18 +1803,22 @@ impl Analyzer {
         counts: &mut BTreeMap<Category, usize>,
     ) {
         let connectors = [
-            "while",
-            "although",
             "however",
             "furthermore",
-            "simultaneously",
-            "nevertheless",
-            "at the same time",
             "moreover",
+            "nevertheless",
+            "nonetheless",
+            "consequently",
+            "therefore",
+            "thus",
+            "accordingly",
+            "as a result",
+            "in addition",
+            "at the same time",
         ];
 
         for (sentence, offset) in sentences {
-            if filtered.is_disabled(*offset) {
+            if filtered.is_category_disabled(*offset, Category::ConnectorGlut) {
                 continue;
             }
             let lower = sentence.to_lowercase();
@@ -1545,8 +1828,12 @@ impl Analyzer {
             }
             if count > self.config.limits.connectors_per_sentence {
                 let location = byte_to_location(text, *offset);
+                if filtered.is_line_ignored(location.line) {
+                    continue;
+                }
                 diagnostics.push(Diagnostic {
                     category: Category::ConnectorGlut,
+                    severity: Severity::Warning,
                     message: format!(
                         "Sentence uses {} connectors; limit is {}.",
                         count, self.config.limits.connectors_per_sentence
@@ -1569,13 +1856,17 @@ impl Analyzer {
         counts: &mut BTreeMap<Category, usize>,
     ) {
         for mat in self.range_regex.find_iter(text) {
-            if filtered.is_disabled(mat.start()) {
+            if filtered.is_category_disabled(mat.start(), Category::Weasel) {
                 continue;
             }
             let snippet = slice_snippet(text, mat.start(), mat.end());
             let location = byte_to_location(text, mat.start());
+            if filtered.is_line_ignored(location.line) {
+                continue;
+            }
             diagnostics.push(Diagnostic {
                 category: Category::Weasel,
+                severity: Severity::Warning,
                 message: format!("Exaggerated range detected: `{snippet}`"),
                 suggestion: Some("List the specific items or tighten the range.".into()),
                 location,
@@ -1603,7 +1894,7 @@ impl Analyzer {
         let mut first_question_snippet = String::new();
 
         for (sentence, offset) in sentences {
-            if filtered.is_disabled(*offset) {
+            if filtered.is_category_disabled(*offset, Category::Tone) {
                 continue;
             }
             let trimmed = sentence.trim();
@@ -1631,8 +1922,12 @@ impl Analyzer {
         if question_count > limit {
             if let Some(start) = first_question_offset {
                 let location = byte_to_location(text, start);
+                if filtered.is_line_ignored(location.line) {
+                    return;
+                }
                 diagnostics.push(Diagnostic {
                     category: Category::Tone,
+                    severity: Severity::Hint,
                     message: format!(
                         "Intro uses {} consecutive questions; limit is {}.",
                         question_count, limit
@@ -1644,6 +1939,38 @@ impl Analyzer {
                 });
                 *counts.entry(Category::Tone).or_default() += 1;
             }
+        }
+    }
+
+    fn detect_mid_sentence_questions(
+        &self,
+        text: &str,
+        sentences: &[(String, usize)],
+        filtered: &DisabledRanges,
+        diagnostics: &mut Vec<Diagnostic>,
+        counts: &mut BTreeMap<Category, usize>,
+    ) {
+        for mat in MID_SENTENCE_QUESTION_RE.find_iter(text) {
+            if filtered.is_category_disabled(mat.start(), Category::Tone) {
+                continue;
+            }
+            let location = byte_to_location(text, mat.start());
+            if filtered.is_line_ignored(location.line) {
+                continue;
+            }
+            let snippet = sentence_index_for_offset(sentences, mat.start())
+                .map(|idx| sentences[idx].0.trim().to_string())
+                .unwrap_or_else(|| slice_snippet(text, mat.start(), mat.end()));
+            diagnostics.push(Diagnostic {
+                category: Category::Tone,
+                severity: Severity::Hint,
+                message: "Mid-sentence question detected.".into(),
+                suggestion: Some("Rewrite as a statement or split into two sentences.".into()),
+                location,
+                span: (mat.start(), mat.end()),
+                snippet,
+            });
+            *counts.entry(Category::Tone).or_default() += 1;
         }
     }
 
@@ -1716,15 +2043,19 @@ impl Analyzer {
         if paragraph.trim().is_empty() {
             return;
         }
-        if filtered.is_disabled(start) {
+        if filtered.is_category_disabled(start, Category::Tone) {
             return;
         }
         let count = paragraph.matches('!').count();
         if count > limit {
             let relative = paragraph.find('!').unwrap_or(0);
             let location = byte_to_location(text, start + relative);
+            if filtered.is_line_ignored(location.line) {
+                return;
+            }
             diagnostics.push(Diagnostic {
                 category: Category::Tone,
+                severity: Severity::Hint,
                 message: format!(
                     "Paragraph contains {} exclamation marks; limit is {}.",
                     count, limit
@@ -1751,14 +2082,18 @@ impl Analyzer {
             return;
         };
         for (sentence, offset) in sentences {
-            if filtered.is_disabled(*offset) {
+            if filtered.is_category_disabled(*offset, Category::SentenceLength) {
                 continue;
             }
             let word_count = sentence.split_whitespace().count();
             if word_count > limit {
                 let location = byte_to_location(text, *offset);
+                if filtered.is_line_ignored(location.line) {
+                    continue;
+                }
                 diagnostics.push(Diagnostic {
                     category: Category::SentenceLength,
+                    severity: Severity::Hint,
                     message: format!(
                         "Sentence length {} exceeds limit of {} words.",
                         word_count, limit
@@ -1787,7 +2122,7 @@ impl Analyzer {
         }
         let mut seen: HashMap<String, usize> = HashMap::new();
         for (sentence, offset) in sentences {
-            if filtered.is_disabled(*offset) {
+            if filtered.is_category_disabled(*offset, Category::Repetition) {
                 continue;
             }
             let normalised = normalize_sentence(sentence);
@@ -1797,8 +2132,12 @@ impl Analyzer {
             let entry = seen.entry(normalised).and_modify(|c| *c += 1).or_insert(1);
             if *entry > profile.max_duplicate_sentences {
                 let location = byte_to_location(text, *offset);
+                if filtered.is_line_ignored(location.line) {
+                    continue;
+                }
                 diagnostics.push(Diagnostic {
                     category: Category::Repetition,
+                    severity: Severity::Warning,
                     message: "Sentence repeats earlier phrasing.".into(),
                     suggestion: Some("Introduce new detail or remove duplicates.".into()),
                     location,
@@ -1826,7 +2165,7 @@ impl Analyzer {
         let mut streak = 0usize;
 
         for (sentence, offset) in sentences {
-            if filtered.is_disabled(*offset) {
+            if filtered.is_category_disabled(*offset, Category::Cadence) {
                 continue;
             }
             let trimmed = sentence.trim_start();
@@ -1858,8 +2197,12 @@ impl Analyzer {
                     }
                     if streak > profile.cadence_limit {
                         let location = byte_to_location(text, *offset);
+                        if filtered.is_line_ignored(location.line) {
+                            continue;
+                        }
                         diagnostics.push(Diagnostic {
                             category: Category::Cadence,
+                            severity: Severity::Hint,
                             message: format!(
                                 "Cadence repeats opening `{}` more than {} times in a row.",
                                 first.trim_matches(|c: char| !c.is_alphanumeric()),
@@ -1893,7 +2236,7 @@ impl Analyzer {
             return;
         }
         for (sentence, offset) in sentences {
-            if filtered.is_disabled(*offset) {
+            if filtered.is_category_disabled(*offset, Category::BroadTerm) {
                 continue;
             }
             let lower = sentence.to_lowercase();
@@ -1903,14 +2246,21 @@ impl Analyzer {
             if lower.starts_with('#') {
                 continue;
             }
+            if sentence_has_specifics(sentence) {
+                continue;
+            }
             if let Some(term) = profile
                 .broad_terms
                 .iter()
-                .find(|term| lower.contains(term.as_str()))
+                .find(|term| find_term_with_boundary(&lower, term).is_some())
             {
                 let location = byte_to_location(text, *offset);
+                if filtered.is_line_ignored(location.line) {
+                    continue;
+                }
                 diagnostics.push(Diagnostic {
                     category: Category::BroadTerm,
+                    severity: Severity::Hint,
                     message: format!("Broad term `{}` detected without specifics.", term),
                     suggestion: Some("Replace with a concrete description.".into()),
                     location,
@@ -1932,13 +2282,20 @@ impl Analyzer {
     ) {
         if let Some(matcher) = &profile.call_to_action_matcher {
             for mat in matcher.find_iter(text.as_bytes()) {
-                if filtered.is_disabled(mat.start()) {
+                if filtered.is_category_disabled(mat.start(), Category::CallToAction) {
+                    continue;
+                }
+                if !has_word_boundary(text, mat.start(), mat.end()) {
                     continue;
                 }
                 let snippet = slice_snippet(text, mat.start(), mat.end());
                 let location = byte_to_location(text, mat.start());
+                if filtered.is_line_ignored(location.line) {
+                    continue;
+                }
                 diagnostics.push(Diagnostic {
                     category: Category::CallToAction,
+                    severity: Severity::Warning,
                     message: format!("Call-to-action template detected: `{snippet}`"),
                     suggestion: Some("Use a direct statement instead of marketing CTA.".into()),
                     location,
@@ -1953,6 +2310,7 @@ impl Analyzer {
     fn detect_confidence(
         &self,
         text: &str,
+        sentences: &[(String, usize)],
         filtered: &DisabledRanges,
         profile: &ProfileRuntime,
         diagnostics: &mut Vec<Diagnostic>,
@@ -1963,13 +2321,27 @@ impl Analyzer {
         if let Some(matcher) = &profile.confidence_matcher {
             for mat in matcher.find_iter(text.as_bytes()) {
                 let start = mat.start();
-                if filtered.is_disabled(start) || flagged.contains(&start) {
+                if filtered.is_category_disabled(start, Category::Confidence)
+                    || flagged.contains(&start)
+                {
+                    continue;
+                }
+                if !has_word_boundary(text, start, mat.end()) {
+                    continue;
+                }
+                let sentence_idx =
+                    sentence_index_for_offset(sentences, start).unwrap_or(usize::MAX);
+                if sentence_idx != usize::MAX && sentence_has_citation(&sentences[sentence_idx].0) {
                     continue;
                 }
                 let snippet = slice_snippet(text, start, mat.end());
                 let location = byte_to_location(text, start);
+                if filtered.is_line_ignored(location.line) {
+                    continue;
+                }
                 diagnostics.push(Diagnostic {
                     category: Category::Confidence,
+                    severity: Severity::Warning,
                     message: format!("Confidence claim `{snippet}` detected without evidence."),
                     suggestion: Some("Provide a source or remove the claim.".into()),
                     location,
@@ -1984,14 +2356,30 @@ impl Analyzer {
         if profile.detect_percent_claims {
             for mat in CONFIDENCE_PERCENT_RE.find_iter(text) {
                 let start = mat.start();
-                if filtered.is_disabled(start) || flagged.contains(&start) {
+                if filtered.is_category_disabled(start, Category::Confidence)
+                    || flagged.contains(&start)
+                {
+                    continue;
+                }
+                let sentence_idx =
+                    sentence_index_for_offset(sentences, start).unwrap_or(usize::MAX);
+                if sentence_idx != usize::MAX && sentence_has_citation(&sentences[sentence_idx].0) {
+                    continue;
+                }
+                if sentence_idx != usize::MAX
+                    && percent_claim_is_contextual(&sentences[sentence_idx].0)
+                {
                     continue;
                 }
                 let end = mat.end();
                 let snippet = slice_snippet(text, start, end);
                 let location = byte_to_location(text, start);
+                if filtered.is_line_ignored(location.line) {
+                    continue;
+                }
                 diagnostics.push(Diagnostic {
                     category: Category::Confidence,
+                    severity: Severity::Warning,
                     message: format!(
                         "Numeric confidence `{snippet}` detected without supporting context."
                     ),
@@ -2009,18 +2397,30 @@ impl Analyzer {
     fn detect_required_patterns(
         &self,
         text: &str,
+        filtered: &DisabledRanges,
         profile: &ProfileRuntime,
         diagnostics: &mut Vec<Diagnostic>,
         counts: &mut BTreeMap<Category, usize>,
     ) {
+        let Some(anchor) = analysis_anchor_offset(filtered, text) else {
+            return;
+        };
+        if filtered.is_category_disabled(anchor, Category::Structure) {
+            return;
+        }
+        let location = byte_to_location(text, anchor);
+        if filtered.is_line_ignored(location.line) {
+            return;
+        }
         for regex in &profile.required_patterns {
             if regex.find(text).is_none() {
                 diagnostics.push(Diagnostic {
                     category: Category::Structure,
+                    severity: Severity::Warning,
                     message: format!("Required pattern `{}` not found.", regex.as_str()),
                     suggestion: Some("Add the missing section or reference.".into()),
-                    location: Location { line: 1, column: 1 },
-                    span: (0, 0),
+                    location: location.clone(),
+                    span: (anchor, anchor),
                     snippet: String::new(),
                 });
                 *counts.entry(Category::Structure).or_default() += 1;
@@ -2038,12 +2438,16 @@ impl Analyzer {
     ) {
         for regex in &profile.forbidden_patterns {
             for mat in regex.find_iter(text) {
-                if filtered.is_disabled(mat.start()) {
+                if filtered.is_category_disabled(mat.start(), Category::Structure) {
                     continue;
                 }
                 let location = byte_to_location(text, mat.start());
+                if filtered.is_line_ignored(location.line) {
+                    continue;
+                }
                 diagnostics.push(Diagnostic {
                     category: Category::Structure,
+                    severity: Severity::Warning,
                     message: format!("Forbidden pattern `{}` detected.", regex.as_str()),
                     suggestion: Some("Remove or rewrite the offending section.".into()),
                     location,
@@ -2077,7 +2481,7 @@ impl Analyzer {
                 trimmed.starts_with("- ") || trimmed.starts_with("* ") || is_numbered_list(trimmed);
             if is_bullet {
                 let offset = line_offset(text, idx);
-                if filtered.is_disabled(offset) {
+                if filtered.is_category_disabled(offset, Category::Structure) {
                     continue;
                 }
                 if current == 0 {
@@ -2088,8 +2492,13 @@ impl Analyzer {
             } else if current > 0 {
                 if current > limit {
                     let location = byte_to_location(text, start_offset);
+                    if filtered.is_line_ignored(location.line) {
+                        current = 0;
+                        continue;
+                    }
                     diagnostics.push(Diagnostic {
                         category: Category::Structure,
+                        severity: Severity::Hint,
                         message: format!("List contains {} items; limit is {}.", current, limit),
                         suggestion: Some("Break long lists into sub-sections.".into()),
                         location,
@@ -2109,8 +2518,12 @@ impl Analyzer {
 
         if current > limit {
             let location = byte_to_location(text, start_offset);
+            if filtered.is_line_ignored(location.line) {
+                return;
+            }
             diagnostics.push(Diagnostic {
                 category: Category::Structure,
+                severity: Severity::Hint,
                 message: format!("List contains {} items; limit is {}.", current, limit),
                 suggestion: Some("Break long lists into sub-sections.".into()),
                 location,
@@ -2121,6 +2534,228 @@ impl Analyzer {
         }
     }
 
+    fn detect_emoji_bullets(
+        &self,
+        text: &str,
+        filtered: &DisabledRanges,
+        diagnostics: &mut Vec<Diagnostic>,
+        counts: &mut BTreeMap<Category, usize>,
+    ) {
+        for (idx, line) in text.lines().enumerate() {
+            let offset = line_offset(text, idx);
+            if filtered.is_category_disabled(offset, Category::Formatting) {
+                continue;
+            }
+            let trimmed = line.trim_start();
+            let content = if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
+                trimmed[2..].trim_start()
+            } else if is_numbered_list(trimmed) {
+                let mut chars = trimmed.char_indices();
+                let mut start = None;
+                while let Some((i, ch)) = chars.next() {
+                    if ch.is_ascii_digit() || ch == '.' || ch == ')' {
+                        continue;
+                    }
+                    if ch.is_whitespace() {
+                        continue;
+                    }
+                    start = Some(i);
+                    break;
+                }
+                match start {
+                    Some(i) => &trimmed[i..],
+                    None => continue,
+                }
+            } else {
+                continue;
+            };
+            if let Some(first) = content.trim_start().chars().next() {
+                if is_emoji_hint(first) {
+                    let location = byte_to_location(text, offset);
+                    if filtered.is_line_ignored(location.line) {
+                        continue;
+                    }
+                    diagnostics.push(Diagnostic {
+                        category: Category::Formatting,
+                        severity: Severity::Hint,
+                        message: "Emoji-led bullet detected.".into(),
+                        suggestion: Some("Use plain text bullets to reduce stylized noise.".into()),
+                        location,
+                        span: (offset, offset + line.len()),
+                        snippet: line.to_string(),
+                    });
+                    *counts.entry(Category::Formatting).or_default() += 1;
+                }
+            }
+        }
+    }
+
+    fn detect_bold_lead_bullets(
+        &self,
+        text: &str,
+        filtered: &DisabledRanges,
+        diagnostics: &mut Vec<Diagnostic>,
+        counts: &mut BTreeMap<Category, usize>,
+    ) {
+        let limit = self.config.limits.bold_lead_bullets_per_list;
+        if limit == 0 {
+            return;
+        }
+
+        let mut in_list = false;
+        let mut bold_leads = 0usize;
+        let mut list_start = 0usize;
+        let mut list_end = 0usize;
+        let mut snippet_lines: Vec<String> = Vec::new();
+
+        let flush = |in_list: &mut bool,
+                     bold_leads: &mut usize,
+                     list_start: &mut usize,
+                     list_end: &mut usize,
+                     snippet_lines: &mut Vec<String>,
+                     filtered: &DisabledRanges,
+                     diagnostics: &mut Vec<Diagnostic>,
+                     counts: &mut BTreeMap<Category, usize>,
+                     text: &str,
+                     limit: usize| {
+            if *in_list && *bold_leads >= limit {
+                if !filtered.is_category_disabled(*list_start, Category::Formatting) {
+                    let location = byte_to_location(text, *list_start);
+                    if !filtered.is_line_ignored(location.line) {
+                        diagnostics.push(Diagnostic {
+                            category: Category::Formatting,
+                            severity: Severity::Hint,
+                            message: format!(
+                                "List uses {} bold-led bullets; limit is {}.",
+                                *bold_leads, limit
+                            ),
+                            suggestion: Some("Use plain bullets or reduce bold lead-ins.".into()),
+                            location,
+                            span: (*list_start, (*list_end).max(*list_start)),
+                            snippet: snippet_lines.join("\n"),
+                        });
+                        *counts.entry(Category::Formatting).or_default() += 1;
+                    }
+                }
+            }
+            *in_list = false;
+            *bold_leads = 0;
+            *list_start = 0;
+            *list_end = 0;
+            snippet_lines.clear();
+        };
+
+        for (idx, line) in text.lines().enumerate() {
+            let offset = line_offset(text, idx);
+            if filtered.is_category_disabled(offset, Category::Formatting) {
+                flush(
+                    &mut in_list,
+                    &mut bold_leads,
+                    &mut list_start,
+                    &mut list_end,
+                    &mut snippet_lines,
+                    filtered,
+                    diagnostics,
+                    counts,
+                    text,
+                    limit,
+                );
+                continue;
+            }
+
+            let trimmed_full = line.trim();
+            if trimmed_full.starts_with("<!--")
+                && trimmed_full.ends_with("-->")
+                && trimmed_full.contains("dwg:")
+            {
+                continue;
+            }
+
+            let trimmed = line.trim_start();
+            if trimmed.is_empty() {
+                flush(
+                    &mut in_list,
+                    &mut bold_leads,
+                    &mut list_start,
+                    &mut list_end,
+                    &mut snippet_lines,
+                    filtered,
+                    diagnostics,
+                    counts,
+                    text,
+                    limit,
+                );
+                continue;
+            }
+
+            let content = if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
+                Some(trimmed[2..].trim_start())
+            } else if is_numbered_list(trimmed) {
+                let mut chars = trimmed.char_indices();
+                let mut start = None;
+                while let Some((i, ch)) = chars.next() {
+                    if ch.is_ascii_digit() || ch == '.' || ch == ')' {
+                        continue;
+                    }
+                    if ch.is_whitespace() {
+                        continue;
+                    }
+                    start = Some(i);
+                    break;
+                }
+                start.map(|i| trimmed[i..].trim_start())
+            } else {
+                None
+            };
+
+            let Some(content) = content else {
+                flush(
+                    &mut in_list,
+                    &mut bold_leads,
+                    &mut list_start,
+                    &mut list_end,
+                    &mut snippet_lines,
+                    filtered,
+                    diagnostics,
+                    counts,
+                    text,
+                    limit,
+                );
+                continue;
+            };
+
+            if !in_list {
+                in_list = true;
+                list_start = offset;
+                snippet_lines.clear();
+                bold_leads = 0;
+            }
+            list_end = offset + line.len();
+            if snippet_lines.len() < 8 {
+                snippet_lines.push(line.to_string());
+            }
+            let content_trimmed = content.trim_start();
+            if !filtered.is_line_ignored(idx + 1)
+                && (content_trimmed.starts_with("**") || content_trimmed.starts_with("__"))
+            {
+                bold_leads += 1;
+            }
+        }
+
+        flush(
+            &mut in_list,
+            &mut bold_leads,
+            &mut list_start,
+            &mut list_end,
+            &mut snippet_lines,
+            filtered,
+            diagnostics,
+            counts,
+            text,
+            limit,
+        );
+    }
+
     fn detect_rule_of_three(
         &self,
         text: &str,
@@ -2129,7 +2764,7 @@ impl Analyzer {
         counts: &mut BTreeMap<Category, usize>,
     ) {
         for (paragraph, offset) in split_paragraphs_with_offset(text) {
-            if filtered.is_disabled(offset) {
+            if filtered.is_category_disabled(offset, Category::RuleOfThree) {
                 continue;
             }
             if paragraph.trim().is_empty() {
@@ -2138,15 +2773,19 @@ impl Analyzer {
             let mut seen = 0;
             for mat in self.rule_of_three_regex.find_iter(paragraph) {
                 let m_start = offset + mat.start();
-                if filtered.is_disabled(m_start) {
+                if filtered.is_category_disabled(m_start, Category::RuleOfThree) {
                     continue;
                 }
                 seen += 1;
                 if seen > self.config.limits.rule_of_three_per_paragraph {
                     let snippet = slice_snippet(text, m_start, m_start + mat.as_str().len());
                     let location = byte_to_location(text, m_start);
+                    if filtered.is_line_ignored(location.line) {
+                        continue;
+                    }
                     diagnostics.push(Diagnostic {
                         category: Category::RuleOfThree,
+                        severity: Severity::Warning,
                         message: format!("Rule-of-three phrasing detected: `{snippet}`"),
                         suggestion: Some("Reduce to the single concrete item that matters.".into()),
                         location,
@@ -2167,7 +2806,7 @@ impl Analyzer {
         counts: &mut BTreeMap<Category, usize>,
     ) {
         for (paragraph, offset) in split_paragraphs_with_offset(text) {
-            if filtered.is_disabled(offset) {
+            if filtered.is_category_disabled(offset, Category::EmDash) {
                 continue;
             }
             if paragraph.trim().is_empty() {
@@ -2176,8 +2815,12 @@ impl Analyzer {
             let occurrences = paragraph.matches('—').count();
             if occurrences > self.config.limits.em_dashes_per_paragraph {
                 let location = byte_to_location(text, offset);
+                if filtered.is_line_ignored(location.line) {
+                    continue;
+                }
                 diagnostics.push(Diagnostic {
                     category: Category::EmDash,
+                    severity: Severity::Hint,
                     message: format!(
                         "Paragraph contains {} em dashes; limit is {}.",
                         occurrences, self.config.limits.em_dashes_per_paragraph
@@ -2192,6 +2835,51 @@ impl Analyzer {
         }
     }
 
+    fn detect_bold_spans(
+        &self,
+        text: &str,
+        filtered: &DisabledRanges,
+        diagnostics: &mut Vec<Diagnostic>,
+        counts: &mut BTreeMap<Category, usize>,
+    ) {
+        let limit = self.config.limits.bold_spans_per_paragraph;
+        if limit == 0 {
+            return;
+        }
+        for (paragraph, offset) in split_paragraphs_with_offset(text) {
+            if paragraph.trim().is_empty() {
+                continue;
+            }
+            if filtered.is_category_disabled(offset, Category::Formatting) {
+                continue;
+            }
+            let mut count = 0usize;
+            for mat in BOLD_SPAN_RE.find_iter(paragraph) {
+                let abs = offset + mat.start();
+                if filtered.is_category_disabled(abs, Category::Formatting) {
+                    continue;
+                }
+                count += 1;
+            }
+            if count > limit {
+                let location = byte_to_location(text, offset);
+                if filtered.is_line_ignored(location.line) {
+                    continue;
+                }
+                diagnostics.push(Diagnostic {
+                    category: Category::Formatting,
+                    severity: Severity::Hint,
+                    message: format!("Paragraph uses {} bold spans; limit is {}.", count, limit),
+                    suggestion: Some("Use bold sparingly or convert to plain labels.".into()),
+                    location,
+                    span: (offset, offset + paragraph.len()),
+                    snippet: paragraph.trim().to_string(),
+                });
+                *counts.entry(Category::Formatting).or_default() += 1;
+            }
+        }
+    }
+
     fn detect_headings(
         &self,
         text: &str,
@@ -2200,13 +2888,6 @@ impl Analyzer {
         diagnostics: &mut Vec<Diagnostic>,
         counts: &mut BTreeMap<Category, usize>,
     ) {
-        let emoji_chars: HashSet<char> = [
-            '😀', '😁', '😂', '🤣', '😃', '😄', '😅', '😊', '😍', '🤩', '🤔', '🚀', '🌟', '🔥',
-            '✨', '💡', '✅', '❗', '⚡', '📈', '🎯',
-        ]
-        .into_iter()
-        .collect();
-
         let mut captures: Vec<HeadingCapture> = Vec::new();
 
         for (idx, line) in text.lines().enumerate() {
@@ -2233,9 +2914,13 @@ impl Analyzer {
             captures.push(capture);
 
             if let Some(max_depth) = profile.max_heading_depth {
-                if level > max_depth {
+                if level > max_depth
+                    && !filtered.is_category_disabled(offset, Category::Structure)
+                    && !filtered.is_line_ignored(idx + 1)
+                {
                     diagnostics.push(Diagnostic {
                         category: Category::Structure,
+                        severity: Severity::Hint,
                         message: format!("Heading depth {} exceeds limit {}.", level, max_depth),
                         suggestion: Some("Flatten heading structure or use fewer levels.".into()),
                         location: Location {
@@ -2249,9 +2934,14 @@ impl Analyzer {
                 }
             }
 
-            if profile.forbid_rhetorical_headings && content.ends_with('?') {
+            if profile.forbid_rhetorical_headings
+                && content.ends_with('?')
+                && !filtered.is_category_disabled(offset, Category::Structure)
+                && !filtered.is_line_ignored(idx + 1)
+            {
                 diagnostics.push(Diagnostic {
                     category: Category::Structure,
+                    severity: Severity::Hint,
                     message: format!("Rhetorical heading detected: `{}`", content),
                     suggestion: Some("Use a declarative heading.".into()),
                     location: Location {
@@ -2264,16 +2954,13 @@ impl Analyzer {
                 *counts.entry(Category::Structure).or_default() += 1;
             }
 
-            let mut has_emoji = false;
-            for ch in content.chars() {
-                if emoji_chars.contains(&ch) {
-                    has_emoji = true;
-                    break;
-                }
-            }
-            if has_emoji {
+            if content.chars().any(is_emoji_hint)
+                && !filtered.is_category_disabled(offset, Category::Formatting)
+                && !filtered.is_line_ignored(idx + 1)
+            {
                 diagnostics.push(Diagnostic {
                     category: Category::Formatting,
+                    severity: Severity::Hint,
                     message: format!("Emoji found in heading: `{content}`"),
                     suggestion: Some("Remove emoji from headings.".into()),
                     location: Location {
@@ -2286,9 +2973,13 @@ impl Analyzer {
                 *counts.entry(Category::Formatting).or_default() += 1;
             }
 
-            if matches_bold_list(line) {
+            if matches_bold_list(line)
+                && !filtered.is_category_disabled(offset, Category::Formatting)
+                && !filtered.is_line_ignored(idx + 1)
+            {
                 diagnostics.push(Diagnostic {
                     category: Category::Formatting,
+                    severity: Severity::Hint,
                     message: "Bold list heading detected".into(),
                     suggestion: Some("Use plain bullet labels instead of bold sentences.".into()),
                     location: Location {
@@ -2303,9 +2994,12 @@ impl Analyzer {
 
             if self.config.heading_style == HeadingStyle::SentenceCase
                 && appears_title_case(content)
+                && !filtered.is_category_disabled(offset, Category::Formatting)
+                && !filtered.is_line_ignored(idx + 1)
             {
                 diagnostics.push(Diagnostic {
                     category: Category::Formatting,
+                    severity: Severity::Hint,
                     message: format!("Heading should be sentence case: `{content}`"),
                     suggestion: Some("Lowercase the remaining words.".into()),
                     location: Location {
@@ -2333,34 +3027,50 @@ impl Analyzer {
                         text: String::new(),
                         lower: String::new(),
                     });
-                diagnostics.push(Diagnostic {
-                    category: Category::Structure,
-                    message: format!(
-                        "Document has {} headings; limit is {}.",
-                        captures.len(),
-                        max
-                    ),
-                    suggestion: Some("Consolidate sections or reduce heading depth.".into()),
-                    location: Location {
-                        line: capture.line,
-                        column: capture.column,
-                    },
-                    span: (capture.offset, capture.offset + capture.len),
-                    snippet: capture.text,
-                });
-                *counts.entry(Category::Structure).or_default() += 1;
+                if !filtered.is_category_disabled(capture.offset, Category::Structure)
+                    && !filtered.is_line_ignored(capture.line)
+                {
+                    diagnostics.push(Diagnostic {
+                        category: Category::Structure,
+                        severity: Severity::Warning,
+                        message: format!(
+                            "Document has {} headings; limit is {}.",
+                            captures.len(),
+                            max
+                        ),
+                        suggestion: Some("Consolidate sections or reduce heading depth.".into()),
+                        location: Location {
+                            line: capture.line,
+                            column: capture.column,
+                        },
+                        span: (capture.offset, capture.offset + capture.len),
+                        snippet: capture.text,
+                    });
+                    *counts.entry(Category::Structure).or_default() += 1;
+                }
             }
         }
 
         let lower_headings: HashSet<String> = captures.iter().map(|c| c.lower.clone()).collect();
         for required in &profile.required_headings {
             if !lower_headings.contains(required) {
+                let Some(anchor) = analysis_anchor_offset(filtered, text) else {
+                    continue;
+                };
+                if filtered.is_category_disabled(anchor, Category::Structure) {
+                    continue;
+                }
+                let location = byte_to_location(text, anchor);
+                if filtered.is_line_ignored(location.line) {
+                    continue;
+                }
                 diagnostics.push(Diagnostic {
                     category: Category::Structure,
+                    severity: Severity::Warning,
                     message: format!("Required heading `{required}` is missing."),
                     suggestion: Some("Add the required section heading.".into()),
-                    location: Location { line: 1, column: 1 },
-                    span: (0, 0),
+                    location,
+                    span: (anchor, anchor),
                     snippet: String::new(),
                 });
                 *counts.entry(Category::Structure).or_default() += 1;
@@ -2370,8 +3080,14 @@ impl Analyzer {
         for regex in &profile.banned_heading_regexes {
             for capture in &captures {
                 if regex.is_match(&capture.text) {
+                    if filtered.is_category_disabled(capture.offset, Category::Structure)
+                        || filtered.is_line_ignored(capture.line)
+                    {
+                        continue;
+                    }
                     diagnostics.push(Diagnostic {
                         category: Category::Structure,
+                        severity: Severity::Warning,
                         message: format!(
                             "Heading `{}` matches disallowed pattern `{}`.",
                             capture.text.trim(),
@@ -2403,13 +3119,17 @@ impl Analyzer {
         }
         let curly_chars = ['“', '”', '‘', '’'];
         for (idx, ch) in text.char_indices() {
-            if filtered.is_disabled(idx) {
+            if filtered.is_category_disabled(idx, Category::QuoteStyle) {
                 continue;
             }
             if curly_chars.contains(&ch) {
                 let location = byte_to_location(text, idx);
+                if filtered.is_line_ignored(location.line) {
+                    continue;
+                }
                 diagnostics.push(Diagnostic {
                     category: Category::QuoteStyle,
+                    severity: Severity::Hint,
                     message: "Curly quotation detected; prefer straight quotes".into(),
                     suggestion: Some("Replace with ' or \".".into()),
                     location,
@@ -2421,9 +3141,174 @@ impl Analyzer {
         }
     }
 
+    /// Detect statistical indicators of AI-generated text:
+    /// - Low sentence length variance (AI writes very uniform sentences)
+    /// - Repeated sentence openings (AI recycles structures)
+    /// - High passive voice density
+    fn detect_statistical_slop(
+        &self,
+        text: &str,
+        sentences: &[(String, usize)],
+        filtered: &DisabledRanges,
+        diagnostics: &mut Vec<Diagnostic>,
+        counts: &mut BTreeMap<Category, usize>,
+    ) {
+        // Need at least 5 sentences for meaningful statistics
+        if sentences.len() < 5 {
+            return;
+        }
+
+        let Some(anchor) = analysis_anchor_offset(filtered, text) else {
+            return;
+        };
+        let anchor_location = byte_to_location(text, anchor);
+
+        let tone_enabled = !filtered.is_category_disabled(anchor, Category::Tone)
+            && !filtered.is_line_ignored(anchor_location.line);
+        let cadence_enabled = !filtered.is_category_disabled(anchor, Category::Cadence)
+            && !filtered.is_line_ignored(anchor_location.line);
+
+        if tone_enabled {
+            // Calculate sentence length statistics
+            let lengths: Vec<usize> = sentences
+                .iter()
+                .filter(|(s, off)| {
+                    !filtered.is_category_disabled(*off, Category::Tone)
+                        && !s.trim().starts_with('#')
+                })
+                .map(|(s, _)| s.split_whitespace().count())
+                .filter(|&len| len >= 3) // Skip very short "sentences"
+                .collect();
+
+            if lengths.len() >= 5 {
+                let avg_len = lengths.iter().sum::<usize>() as f32 / lengths.len() as f32;
+                let variance = lengths
+                    .iter()
+                    .map(|&len| {
+                        let diff = len as f32 - avg_len;
+                        diff * diff
+                    })
+                    .sum::<f32>()
+                    / lengths.len() as f32;
+                let std_dev = variance.sqrt();
+
+                // Coefficient of variation: std_dev / mean
+                // AI-generated text typically has CV < 0.25 (very uniform)
+                // Human text typically has CV > 0.35
+                let cv = if avg_len > 0.0 {
+                    std_dev / avg_len
+                } else {
+                    1.0
+                };
+
+                // Very low variance is a strong AI signal
+                if cv < 0.20 && lengths.len() >= 8 {
+                    diagnostics.push(Diagnostic {
+                        category: Category::Tone,
+                        severity: Severity::Warning,
+                        message: format!(
+                            "Suspiciously uniform sentence lengths (CV={:.2}). AI-generated text typically has low variance.",
+                            cv
+                        ),
+                        suggestion: Some(
+                            "Vary your sentence lengths for more natural rhythm.".into(),
+                        ),
+                        location: anchor_location.clone(),
+                        span: (anchor, (anchor + 100).min(text.len())),
+                        snippet: "Document-level analysis".into(),
+                    });
+                    *counts.entry(Category::Tone).or_default() += 1;
+                }
+            }
+
+            // Check for passive voice density
+            let passive_re = &*PASSIVE_VOICE_RE;
+            let passive_total = sentences
+                .iter()
+                .filter(|(_, off)| !filtered.is_category_disabled(*off, Category::Tone))
+                .count();
+            if passive_total > 0 {
+                let passive_count = sentences
+                    .iter()
+                    .filter(|(s, off)| {
+                        !filtered.is_category_disabled(*off, Category::Tone)
+                            && passive_re.is_match(s)
+                    })
+                    .count();
+                let passive_ratio = passive_count as f32 / passive_total as f32;
+
+                // >50% passive voice is a strong AI signal
+                if passive_ratio > 0.5 && passive_total >= 6 {
+                    diagnostics.push(Diagnostic {
+                        category: Category::Tone,
+                        severity: Severity::Hint,
+                        message: format!(
+                            "High passive voice density ({:.0}% of sentences). Consider using active voice.",
+                            passive_ratio * 100.0
+                        ),
+                        suggestion: Some(
+                            "Rewrite passive constructions as active statements.".into(),
+                        ),
+                        location: anchor_location.clone(),
+                        span: (anchor, (anchor + 100).min(text.len())),
+                        snippet: "Document-level analysis".into(),
+                    });
+                    *counts.entry(Category::Tone).or_default() += 1;
+                }
+            }
+        }
+
+        if cadence_enabled {
+            // Check for repeated sentence openings (first 2-3 words)
+            let mut opening_counts: HashMap<String, usize> = HashMap::new();
+            let mut opening_total = 0usize;
+            for (sentence, off) in sentences {
+                if filtered.is_category_disabled(*off, Category::Cadence) {
+                    continue;
+                }
+                let trimmed = sentence.trim();
+                if trimmed.starts_with('#') || trimmed.starts_with('-') || trimmed.starts_with('*')
+                {
+                    continue;
+                }
+                let words: Vec<&str> = trimmed.split_whitespace().take(3).collect();
+                if words.len() >= 2 {
+                    opening_total += 1;
+                    let opening = words[..2.min(words.len())].join(" ").to_lowercase();
+                    *opening_counts.entry(opening).or_default() += 1;
+                }
+            }
+
+            // If any opening appears in >40% of sentences, that's suspicious
+            if opening_total > 0 {
+                for (opening, count) in opening_counts {
+                    let ratio = count as f32 / opening_total as f32;
+                    if ratio > 0.4 && count >= 4 {
+                        diagnostics.push(Diagnostic {
+                            category: Category::Cadence,
+                            severity: Severity::Hint,
+                            message: format!(
+                                "Repetitive sentence opening `{}...` used in {:.0}% of sentences.",
+                                opening,
+                                ratio * 100.0
+                            ),
+                            suggestion: Some("Vary your sentence openings for better flow.".into()),
+                            location: anchor_location.clone(),
+                            span: (anchor, (anchor + 100).min(text.len())),
+                            snippet: "Document-level analysis".into(),
+                        });
+                        *counts.entry(Category::Cadence).or_default() += 1;
+                        break; // Only report once
+                    }
+                }
+            }
+        }
+    }
+
     fn detect_min_code_blocks(
         &self,
         text: &str,
+        filtered: &DisabledRanges,
         profile: &ProfileRuntime,
         diagnostics: &mut Vec<Diagnostic>,
         counts: &mut BTreeMap<Category, usize>,
@@ -2441,15 +3326,26 @@ impl Analyzer {
             }
         }
         if blocks < min_blocks {
+            let Some(anchor) = analysis_anchor_offset(filtered, text) else {
+                return;
+            };
+            if filtered.is_category_disabled(anchor, Category::Structure) {
+                return;
+            }
+            let location = byte_to_location(text, anchor);
+            if filtered.is_line_ignored(location.line) {
+                return;
+            }
             diagnostics.push(Diagnostic {
                 category: Category::Structure,
+                severity: Severity::Warning,
                 message: format!(
                     "Document has {} code block fences; minimum is {}.",
                     blocks, min_blocks
                 ),
                 suggestion: Some("Add runnable examples or configuration snippets.".into()),
-                location: Location { line: 1, column: 1 },
-                span: (0, 0),
+                location,
+                span: (anchor, anchor),
                 snippet: String::new(),
             });
             *counts.entry(Category::Structure).or_default() += 1;
@@ -2476,7 +3372,10 @@ impl Analyzer {
             let content = line.trim_start_matches('#').trim().to_lowercase();
             if triad.iter().any(|t| content == *t) {
                 let offset = line_offset(text, idx);
-                if filtered.is_disabled(offset) {
+                if filtered.is_category_disabled(offset, Category::Structure) {
+                    continue;
+                }
+                if filtered.is_line_ignored(idx + 1) {
                     continue;
                 }
                 present.push(HeadingCapture {
@@ -2491,8 +3390,12 @@ impl Analyzer {
         }
         if present.len() >= 2 {
             let cap = &present[0];
+            if filtered.is_line_ignored(cap.line) {
+                return;
+            }
             diagnostics.push(Diagnostic {
                 category: Category::Structure,
+                severity: Severity::Warning,
                 message: "Slop template triad detected (summary/conclusion/future development)."
                     .into(),
                 suggestion: Some("Merge sections or remove boilerplate headings.".into()),
@@ -2529,7 +3432,7 @@ impl Analyzer {
                 continue;
             }
             let offset = line_offset(text, idx);
-            if filtered.is_disabled(offset) {
+            if filtered.is_category_disabled(offset, Category::Structure) {
                 continue;
             }
             let content = line.trim_start_matches('#').trim();
@@ -2586,6 +3489,9 @@ impl Analyzer {
                 if *off < start || *off >= end {
                     continue;
                 }
+                if filtered.is_category_disabled(*off, Category::Structure) {
+                    continue;
+                }
                 // ignore bullets and empty
                 let trimmed = sent.trim();
                 if trimmed.is_empty() {
@@ -2601,8 +3507,12 @@ impl Analyzer {
                 count += 1;
             }
             if count < min_sents {
+                if filtered.is_line_ignored(cap.line) {
+                    continue;
+                }
                 diagnostics.push(Diagnostic {
                     category: Category::Structure,
+                    severity: Severity::Hint,
                     message: format!(
                         "Section `{}` is thin: {} sentences; minimum {}.",
                         cap.lower, count, min_sents
@@ -2624,33 +3534,230 @@ impl Analyzer {
 }
 
 /// Precomputed disabled regions guarded by `<!-- dwg:off -->` ... `<!-- dwg:on -->` markers.
+/// Precomputed disabled regions for the analyzer.
+/// Supports:
+/// - `<!-- dwg:off -->` ... `<!-- dwg:on -->` - disable all checks
+/// - `<!-- dwg:ignore category -->` ... `<!-- dwg:end-ignore -->` - disable specific category
+/// - `<!-- dwg:ignore-line -->` - disable the current line
+/// - Code fences, inline code, URLs, frontmatter
 struct DisabledRanges {
-    ranges: Vec<(usize, usize)>,
+    /// Ranges where all checks are disabled
+    global_ranges: Vec<(usize, usize)>,
+    /// Ranges where specific categories are disabled
+    category_ranges: HashMap<Category, Vec<(usize, usize)>>,
+    /// Line numbers where all checks are disabled via ignore-line
+    ignored_lines: HashSet<usize>,
 }
+
+/// Regex to match inline ignore comments: <!-- dwg:ignore category -->
+static INLINE_IGNORE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"<!--\s*dwg:ignore\s+([a-z-,\s]+)\s*-->").expect("valid inline ignore regex")
+});
+
+/// Regex to match end-ignore comments: <!-- dwg:end-ignore -->
+static END_IGNORE_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"<!--\s*dwg:end-ignore\s*-->").expect("valid end ignore regex"));
+
+/// Regex to match ignore-line comments: <!-- dwg:ignore-line -->
+static IGNORE_LINE_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"<!--\s*dwg:ignore-line\s*-->").expect("valid ignore line regex"));
 
 impl DisabledRanges {
     fn new(text: &str) -> Self {
-        let mut ranges = Vec::new();
+        let mut global_ranges = Vec::new();
+        let mut category_ranges: HashMap<Category, Vec<(usize, usize)>> = HashMap::new();
+        let mut ignored_lines: HashSet<usize> = HashSet::new();
+
+        // Explicit dwg:off ranges (global disable).
         let mut cursor = 0;
         let bytes = text.as_bytes();
         while let Some(start_idx) = find_subsequence(bytes, b"<!-- dwg:off -->", cursor) {
             let search_from = start_idx + "<!-- dwg:off -->".len();
             if let Some(end_idx) = find_subsequence(bytes, b"<!-- dwg:on -->", search_from) {
-                ranges.push((start_idx, end_idx + "<!-- dwg:on -->".len()));
+                global_ranges.push((start_idx, end_idx + "<!-- dwg:on -->".len()));
                 cursor = end_idx + "<!-- dwg:on -->".len();
             } else {
-                ranges.push((start_idx, text.len()));
+                global_ranges.push((start_idx, text.len()));
                 break;
             }
         }
-        Self { ranges }
+
+        // Category-specific ignores: <!-- dwg:ignore category --> ... <!-- dwg:end-ignore -->
+        for cap in INLINE_IGNORE_RE.captures_iter(text) {
+            let full_match = cap.get(0).unwrap();
+            let categories = cap.get(1).unwrap().as_str();
+            let start = full_match.start();
+
+            // Find the end-ignore marker
+            let search_from = full_match.end();
+            if let Some(end_match) = END_IGNORE_RE.find(&text[search_from..]) {
+                let end = search_from + end_match.end();
+                let mut found_any = false;
+                for raw in categories.split(',') {
+                    let name = raw.trim();
+                    if name.is_empty() {
+                        continue;
+                    }
+                    if let Some(cat) = parse_category(name) {
+                        category_ranges.entry(cat).or_default().push((start, end));
+                        found_any = true;
+                    }
+                }
+                if !found_any {
+                    global_ranges.push((start, end));
+                }
+            } else {
+                // If no end marker, apply to rest of document
+                let mut found_any = false;
+                for raw in categories.split(',') {
+                    let name = raw.trim();
+                    if name.is_empty() {
+                        continue;
+                    }
+                    if let Some(cat) = parse_category(name) {
+                        category_ranges
+                            .entry(cat)
+                            .or_default()
+                            .push((start, text.len()));
+                        found_any = true;
+                    }
+                }
+                if !found_any {
+                    global_ranges.push((start, text.len()));
+                }
+            }
+        }
+
+        // Ignore-line markers: <!-- dwg:ignore-line -->
+        let mut line_num = 1usize;
+        for line in text.lines() {
+            if IGNORE_LINE_RE.is_match(line) {
+                ignored_lines.insert(line_num);
+                if line.trim() == "<!-- dwg:ignore-line -->" {
+                    ignored_lines.insert(line_num + 1);
+                }
+            }
+            line_num += 1;
+        }
+
+        // YAML frontmatter at the top of the file.
+        if let Some(first_line) = text.lines().next() {
+            if first_line.trim() == "---" {
+                let mut end = 0usize;
+                for line in text.split_inclusive('\n') {
+                    end += line.len();
+                    let trimmed = line.trim();
+                    if trimmed == "---" || trimmed == "..." {
+                        global_ranges.push((0, end));
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Fenced code blocks (``` or ~~~).
+        let mut in_fence = false;
+        let mut fence_start = 0usize;
+        let mut offset = 0usize;
+        for line in text.split_inclusive('\n') {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+                if !in_fence {
+                    in_fence = true;
+                    fence_start = offset;
+                } else {
+                    in_fence = false;
+                    global_ranges.push((fence_start, offset + line.len()));
+                }
+            }
+            offset += line.len();
+        }
+        if in_fence {
+            global_ranges.push((fence_start, text.len()));
+        }
+
+        // Inline code spans on a single line.
+        let bytes = text.as_bytes();
+        let mut i = 0usize;
+        while i < bytes.len() {
+            if bytes[i] == b'`' && !is_in_ranges(&global_ranges, i) {
+                if bytes.get(i + 1) == Some(&b'`') && bytes.get(i + 2) == Some(&b'`') {
+                    i += 3;
+                    continue;
+                }
+                let mut j = i + 1;
+                while j < bytes.len() && bytes[j] != b'\n' {
+                    if bytes[j] == b'`' {
+                        global_ranges.push((i, j + 1));
+                        i = j + 1;
+                        break;
+                    }
+                    j += 1;
+                }
+                if j >= bytes.len() || bytes[j] == b'\n' {
+                    i += 1;
+                }
+            } else {
+                i += 1;
+            }
+        }
+
+        // Raw URLs.
+        for mat in URL_RE.find_iter(text) {
+            if is_in_ranges(&global_ranges, mat.start()) {
+                continue;
+            }
+            global_ranges.push((mat.start(), mat.end()));
+        }
+
+        Self {
+            global_ranges,
+            category_ranges,
+            ignored_lines,
+        }
     }
 
+    /// Check if a byte offset is disabled globally (all checks).
     fn is_disabled(&self, byte_offset: usize) -> bool {
-        self.ranges
+        self.global_ranges
             .iter()
             .any(|(start, end)| byte_offset >= *start && byte_offset < *end)
     }
+
+    /// Check if a specific category is disabled at the given byte offset.
+    fn is_category_disabled(&self, byte_offset: usize, category: Category) -> bool {
+        // First check global disables
+        if self.is_disabled(byte_offset) {
+            return true;
+        }
+        // Then check category-specific disables
+        if let Some(ranges) = self.category_ranges.get(&category) {
+            if ranges
+                .iter()
+                .any(|(start, end)| byte_offset >= *start && byte_offset < *end)
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Check if a specific line number is ignored via <!-- dwg:ignore-line -->.
+    fn is_line_ignored(&self, line_num: usize) -> bool {
+        self.ignored_lines.contains(&line_num)
+    }
+}
+
+fn analysis_anchor_offset(filtered: &DisabledRanges, text: &str) -> Option<usize> {
+    if text.is_empty() {
+        return Some(0);
+    }
+    for (idx, _) in text.char_indices() {
+        if !filtered.is_disabled(idx) {
+            return Some(idx);
+        }
+    }
+    None
 }
 
 fn find_subsequence(buf: &[u8], needle: &[u8], start: usize) -> Option<usize> {
@@ -2661,6 +3768,82 @@ fn find_subsequence(buf: &[u8], needle: &[u8], start: usize) -> Option<usize> {
         .windows(needle.len())
         .position(|window| window == needle)
         .map(|pos| pos + start)
+}
+
+fn is_in_ranges(ranges: &[(usize, usize)], pos: usize) -> bool {
+    ranges
+        .iter()
+        .any(|(start, end)| pos >= *start && pos < *end)
+}
+
+const EMOJI_HINTS: [char; 28] = [
+    '😀', '😁', '😂', '🤣', '😃', '😄', '😅', '😊', '😍', '🤩', '🤔', '🚀', '🌟', '🔥', '✨', '💡',
+    '✅', '❗', '⚡', '📈', '🎯', '📌', '👉', '⚠', '💥', '⭐', '🎉', '🧠',
+];
+
+const ALLOWED_SUFFIXES: [&str; 6] = ["s", "es", "ed", "ing", "ly", "d"];
+
+fn is_emoji_hint(ch: char) -> bool {
+    EMOJI_HINTS.contains(&ch)
+}
+
+fn is_word_char(ch: char) -> bool {
+    ch.is_alphanumeric() || matches!(ch, '_' | '-' | '\'')
+}
+
+fn has_word_boundary(text: &str, start: usize, end: usize) -> bool {
+    let prev = text[..start].chars().rev().next();
+    if let Some(ch) = prev {
+        if is_word_char(ch) {
+            return false;
+        }
+    }
+
+    let rest = &text[end..];
+    let next = rest.chars().next();
+    let Some(next_ch) = next else {
+        return true;
+    };
+    if !is_word_char(next_ch) {
+        return true;
+    }
+    if !next_ch.is_ascii_alphabetic() {
+        return false;
+    }
+
+    for suffix in ALLOWED_SUFFIXES {
+        if let Some(prefix) = rest.get(..suffix.len()) {
+            if prefix.eq_ignore_ascii_case(suffix) {
+                let after = rest[suffix.len()..].chars().next();
+                if after.map_or(true, |ch| !is_word_char(ch)) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}
+
+fn find_term_with_boundary(haystack: &str, needle: &str) -> Option<usize> {
+    let needle = needle.trim();
+    if needle.is_empty() {
+        return None;
+    }
+    let mut start = 0usize;
+    while start < haystack.len() {
+        let slice = &haystack[start..];
+        let Some(rel) = slice.find(needle) else {
+            return None;
+        };
+        let abs = start + rel;
+        let end = abs + needle.len();
+        if end <= haystack.len() && has_word_boundary(haystack, abs, end) {
+            return Some(abs);
+        }
+        start = abs + 1;
+    }
+    None
 }
 
 fn matches_bold_list(line: &str) -> bool {
@@ -2811,6 +3994,27 @@ fn split_sentences_with_offset(text: &str) -> Vec<(String, usize)> {
     sentences
 }
 
+fn sentence_index_for_offset(sentences: &[(String, usize)], offset: usize) -> Option<usize> {
+    for (idx, (sentence, start)) in sentences.iter().enumerate() {
+        if offset >= *start && offset < *start + sentence.len() {
+            return Some(idx);
+        }
+    }
+    None
+}
+
+fn sentence_has_specifics(sentence: &str) -> bool {
+    SPECIFICITY_RE.is_match(sentence)
+}
+
+fn sentence_has_citation(sentence: &str) -> bool {
+    CITATION_RE.is_match(sentence)
+}
+
+fn percent_claim_is_contextual(sentence: &str) -> bool {
+    PERCENT_CONTEXT_OK_RE.is_match(sentence)
+}
+
 fn normalize_sentence(sentence: &str) -> String {
     let mut normalised = String::with_capacity(sentence.len());
     let mut last_was_space = false;
@@ -2852,7 +4056,114 @@ fn is_numbered_list(line: &str) -> bool {
 }
 
 static CONFIDENCE_PERCENT_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)\b\d{2,}%\b").expect("valid percent regex"));
+    Lazy::new(|| Regex::new(r"(?i)\b\d{2,}%").expect("valid percent regex"));
+
+static MID_SENTENCE_QUESTION_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\?\s+[a-z]").expect("valid question regex"));
+
+/// Detect passive voice constructions.
+/// Matches patterns like "is/was/were/been/being + past participle"
+static PASSIVE_VOICE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?ix)
+        \b(?:is|are|was|were|be|been|being)\s+
+        (?:
+            \w+ed\b |           # Regular past participles (created, handled)
+            \w+en\b |           # Irregular (written, taken, given)
+            made\b | done\b | said\b | seen\b | known\b | shown\b |
+            built\b | sent\b | left\b | found\b | told\b | thought\b |
+            used\b | called\b | considered\b | designed\b | intended\b
+        )
+        ",
+    )
+    .expect("valid passive voice regex")
+});
+
+static BOLD_SPAN_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?s)(\*\*[^*]+\*\*|__[^_]+__)").expect("valid bold span regex"));
+
+static SPECIFICITY_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?x)
+        # Semantic versions and simple versions
+        \bv\d+(?:\.\d+)*\b |                   # v1, v2, v1.0, v1.2.3
+        \b\d+\.\d+(?:\.\d+)+\b |               # 1.2.3 (at least 2 dots)
+        
+        # Issue/ticket references
+        \#\d{2,}\b |                           # GitHub issues (#123)
+        \b[A-Z]{2,}-\d+\b |                    # Jira tickets (PROJ-123)
+        
+        # Code identifiers (case-sensitive)
+        \b[a-z]{2,}[A-Z][A-Za-z0-9]{2,}\b |    # camelCase
+        \b[a-z]{2,}_[a-z0-9_]{2,}\b |          # snake_case
+        \b[A-Z]{2}[A-Z0-9_]{2,}\b |            # CONSTANTS (min 4 uppercase)
+        
+        # File paths with slash
+        /[\w./-]+ |
+        
+        # URLs
+        https?://\S+ |
+        www\.\S+ |
+        
+        # Figure/Table/Listing references (case insensitive)
+        (?i)\b(?:Figure|Fig|Table|Tbl|Listing|Example|Appendix)\s+\d+(?-i) |
+        
+        # Technical references
+        (?i)\b(?:RFC|ISO|IEEE)\s*\d+(?-i) |
+        \bport\s+\d{2,5}\b |
+        \$[A-Z][A-Z0-9_]+ |
+        
+        # Function/method calls
+        \b[a-zA-Z_]\w*\(\) |
+        \b\w+::\w+ |
+        
+        # Quantities with units (case insensitive for units)
+        \b\d+\s*(?i)(?:ms|sec|min|hours?|KB|MB|GB|TB|bytes?)(?-i)\b |
+        \b\d{2,}%\s+of\b
+    ",
+    )
+    .expect("valid specificity regex")
+});
+
+static URL_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)\bhttps?://[^\s<>()]+|\bwww\.[^\s<>()]+").expect("valid url regex")
+});
+
+static CITATION_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?ix)
+        \[[0-9]{1,3}\] |
+        \[[^\]]+\]\([^)]+\) |
+        \([A-Z][A-Za-z]+(?:\s+et\ al\.)?,?\s+\d{4}\) |
+        \bdoi:\S+ |
+        \bhttps?://\S+ |
+        \bwww\.\S+
+    ",
+    )
+    .expect("valid citation regex")
+});
+
+static PERCENT_CONTEXT_OK_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?ix)
+        \b\d{2,}%\s+
+        (?:
+            of\b |
+            (?:test\s+)?coverage\b |
+            uptime\b |
+            availability\b |
+            requests?\b |
+            traffic\b |
+            samples?\b |
+            pass(?:\s+rate)?\b |
+            success(?:\s+rate)?\b |
+            failure(?:\s+rate)?\b |
+            errors?\b
+        )
+    ",
+    )
+    .expect("valid percent context regex")
+});
 
 fn count_words(text: &str) -> usize {
     text.split_whitespace()
@@ -2986,6 +4297,16 @@ mod tests {
     }
 
     #[test]
+    fn allows_weasel_with_citation() {
+        let a = analyzer();
+        let report = analyze_default(&a, "Experts say the change improved results [1].");
+        assert!(report
+            .diagnostics
+            .iter()
+            .all(|d| d.category != Category::Weasel));
+    }
+
+    #[test]
     fn detects_transition_phrase() {
         let a = analyzer();
         let report = analyze_default(&a, "Furthermore, we will ship the feature tomorrow.");
@@ -3046,5 +4367,84 @@ mod tests {
             .diagnostics
             .iter()
             .any(|d| d.category == Category::Confidence));
+    }
+
+    #[test]
+    fn allows_confidence_with_citation() {
+        let mut cfg = Config::default();
+        cfg.profile_defaults.confidence_phrases = vec!["industry-leading".into()];
+        let a = Analyzer::new(cfg).unwrap();
+        let profile = a.profile_for_name("default").unwrap();
+        let report = a.analyze_with_profile(
+            "Our industry-leading tool leads benchmarks (Smith, 2024).",
+            profile,
+        );
+        assert!(report
+            .diagnostics
+            .iter()
+            .all(|d| d.category != Category::Confidence));
+    }
+
+    #[test]
+    fn ignores_code_fences_and_inline_code() {
+        let a = analyzer();
+        let text = "Intro sentence.\n\n```\nWe will delve into the code here.\n```\n\nUse `utilize` in a snippet.\n\nWe will delve into details.";
+        let report = analyze_default(&a, text);
+        let buzzwords: Vec<&Diagnostic> = report
+            .diagnostics
+            .iter()
+            .filter(|d| d.category == Category::Buzzword)
+            .collect();
+        assert_eq!(buzzwords.len(), 1);
+    }
+
+    #[test]
+    fn suppresses_single_buzzword_with_specifics() {
+        let a = analyzer();
+        let report = analyze_default(&a, "We used a robust API v2 for the rollout.");
+        assert!(report
+            .diagnostics
+            .iter()
+            .all(|d| d.category != Category::Buzzword));
+    }
+
+    #[test]
+    fn flags_buzzword_cluster_with_specifics() {
+        let a = analyzer();
+        let report = analyze_default(&a, "We used a robust, seamless API v2 to ship the update.");
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|d| d.category == Category::Buzzword));
+    }
+
+    #[test]
+    fn detects_emoji_bullet() {
+        let a = analyzer();
+        let report = analyze_default(&a, "- ✅ Ship the change\n- plain follow-up");
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|d| d.category == Category::Formatting));
+    }
+
+    #[test]
+    fn detects_mid_sentence_question() {
+        let a = analyzer();
+        let report = analyze_default(&a, "This seems odd? it keeps going anyway.");
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|d| d.category == Category::Tone));
+    }
+
+    #[test]
+    fn matches_common_suffix_buzzwords() {
+        let a = analyzer();
+        let report = analyze_default(&a, "We utilized the system.");
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|d| d.category == Category::Buzzword));
     }
 }

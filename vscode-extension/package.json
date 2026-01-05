@@ -1,8 +1,8 @@
 {
   "name": "toneguard",
   "displayName": "ToneGuard",
-  "description": "Highlights AI-style writing patterns by shelling out to the ToneGuard CLI.",
-  "version": "0.1.37",
+  "description": "Highlights AI-style writing patterns using the ToneGuard language server.",
+  "version": "0.1.38",
   "publisher": "editnori",
   "engines": {
     "vscode": "^1.86.0"
@@ -33,8 +33,8 @@
       "properties": {
         "dwg.command": {
           "type": "string",
-          "default": "dwg-cli",
-          "description": "Executable that outputs DWG JSON diagnostics (typically dwg-cli)."
+          "default": "dwg-lsp",
+          "description": "Executable for the ToneGuard language server (typically dwg-lsp)."
         },
         "dwg.configPath": {
           "type": "string",
@@ -221,6 +221,9 @@
     "compile": "tsc -p tsconfig.json",
     "lint": "eslint src --ext ts",
     "package": "vsce package"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
   },
   "devDependencies": {
     "@types/node": "^20.11.25",

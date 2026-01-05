@@ -104,6 +104,25 @@ struct CommentArgs {
     paths: Vec<PathBuf>,
 }
 
+#[derive(Debug, Parser)]
+#[command(
+    name = "dwg calibrate",
+    about = "Learn from good writing samples to tune ToneGuard thresholds."
+)]
+struct CalibrateArgs {
+    /// Path to config file (YAML).
+    #[arg(long, default_value = "layth-style.yml")]
+    config: PathBuf,
+
+    /// Output file for calibration profile.
+    #[arg(long, short, default_value = "calibration.yml")]
+    output: PathBuf,
+
+    /// Files or directories of good writing samples to learn from.
+    #[arg(value_name = "PATH", num_args = 1..)]
+    paths: Vec<PathBuf>,
+}
+
 #[derive(Debug, Serialize)]
 struct FileResult {
     path: String,
@@ -132,13 +151,26 @@ struct OutputReport {
 
 fn main() -> anyhow::Result<()> {
     let argv: Vec<OsString> = env::args_os().collect();
-    if argv.len() > 1 && argv[1].as_os_str() == OsStr::new("comments") {
-        let mut forwarded = Vec::with_capacity(argv.len() - 1);
-        forwarded.push(argv[0].clone());
-        forwarded.extend_from_slice(&argv[2..]);
-        let comment_args = CommentArgs::parse_from(forwarded);
-        run_comments(comment_args)?;
-        return Ok(());
+
+    // Handle subcommands
+    if argv.len() > 1 {
+        let subcommand = argv[1].as_os_str();
+        if subcommand == OsStr::new("comments") {
+            let mut forwarded = Vec::with_capacity(argv.len() - 1);
+            forwarded.push(argv[0].clone());
+            forwarded.extend_from_slice(&argv[2..]);
+            let comment_args = CommentArgs::parse_from(forwarded);
+            run_comments(comment_args)?;
+            return Ok(());
+        }
+        if subcommand == OsStr::new("calibrate") {
+            let mut forwarded = Vec::with_capacity(argv.len() - 1);
+            forwarded.push(argv[0].clone());
+            forwarded.extend_from_slice(&argv[2..]);
+            let calibrate_args = CalibrateArgs::parse_from(forwarded);
+            run_calibrate(calibrate_args)?;
+            return Ok(());
+        }
     }
 
     let args = Args::parse();
@@ -184,8 +216,9 @@ fn run_lint(args: Args) -> anyhow::Result<()> {
     let mut exit_due_to_threshold = false;
 
     for path in files {
-        let content = fs::read_to_string(&path)
-            .with_context(|| format!("Failed to read {}", path.display()))?;
+        let bytes =
+            fs::read(&path).with_context(|| format!("Failed to read {}", path.display()))?;
+        let content = String::from_utf8_lossy(&bytes).to_string();
         let rel_path = pathdiff::diff_paths(&path, &config_root).unwrap_or_else(|| path.clone());
         let rel_path_clean = rel_path.to_string_lossy().replace("\\", "/");
         let profile_name = if let Some(force) = &args.profile {
@@ -924,6 +957,179 @@ fn run_comments(args: CommentArgs) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Calibrate ToneGuard by learning from good writing samples.
+/// Generates a calibration.yml with adjusted thresholds.
+fn run_calibrate(args: CalibrateArgs) -> anyhow::Result<()> {
+    use std::collections::HashMap;
+
+    let (cfg, _config_root) = load_config(&args.config)?;
+    let analyzer = Analyzer::new(cfg.clone())?;
+
+    let file_ignore = build_ignore_set(&cfg.repo_rules.ignore_globs)?;
+    let mut files = collect_files(&args.paths, file_ignore.as_ref())?;
+    files.sort();
+
+    if files.is_empty() {
+        return Err(anyhow!("No markdown files found in the provided paths."));
+    }
+
+    println!(
+        "{}",
+        style(format!("Calibrating from {} files...", files.len())).bold()
+    );
+
+    // Collect statistics
+    let mut total_words = 0usize;
+    let mut phrase_counts: HashMap<String, usize> = HashMap::new();
+    let mut category_counts: BTreeMap<Category, usize> = BTreeMap::new();
+    let mut sentence_lengths: Vec<usize> = Vec::new();
+    let mut file_densities: Vec<f32> = Vec::new();
+
+    for path in &files {
+        let bytes = fs::read(path).with_context(|| format!("Failed to read {}", path.display()))?;
+        let content = String::from_utf8_lossy(&bytes).to_string();
+        let report = analyzer.analyze(&content);
+
+        total_words += report.word_count;
+        file_densities.push(report.density_per_100_words());
+
+        // Count category occurrences
+        for (cat, count) in &report.category_counts {
+            *category_counts.entry(*cat).or_default() += count;
+        }
+
+        // Collect flagged phrases to potentially whitelist
+        for diag in &report.diagnostics {
+            let snippet_lower = diag.snippet.to_lowercase();
+            *phrase_counts.entry(snippet_lower).or_default() += 1;
+        }
+
+        // Estimate sentence lengths from content
+        for sentence in content.split(|c| c == '.' || c == '!' || c == '?') {
+            let word_count = sentence.split_whitespace().count();
+            if word_count >= 3 {
+                sentence_lengths.push(word_count);
+            }
+        }
+    }
+
+    // Calculate statistics
+    let avg_density = if file_densities.is_empty() {
+        0.0
+    } else {
+        file_densities.iter().sum::<f32>() / file_densities.len() as f32
+    };
+
+    let max_density = file_densities.iter().copied().fold(0.0f32, |a, b| a.max(b));
+
+    let avg_sentence_length = if sentence_lengths.is_empty() {
+        20.0
+    } else {
+        sentence_lengths.iter().sum::<usize>() as f64 / sentence_lengths.len() as f64
+    };
+
+    // Identify phrases that appear frequently (candidates for whitelisting)
+    let mut whitelist_candidates: Vec<_> = phrase_counts
+        .iter()
+        .filter(|(_, count)| **count >= 2) // Appears in at least 2 files
+        .map(|(phrase, count)| (phrase.clone(), *count))
+        .collect();
+    whitelist_candidates.sort_by(|a, b| b.1.cmp(&a.1));
+
+    // Generate calibration output
+    println!();
+    println!("{}", style("Calibration Results:").bold().green());
+    println!("  Total files analyzed: {}", files.len());
+    println!("  Total words: {}", total_words);
+    println!("  Average density: {:.2} flags per 100 words", avg_density);
+    println!("  Maximum density: {:.2} flags per 100 words", max_density);
+    println!(
+        "  Average sentence length: {:.1} words",
+        avg_sentence_length
+    );
+    println!();
+
+    // Suggest thresholds
+    let suggested_warn = (max_density * 1.5).max(3.0).round() as u32;
+    let suggested_fail = (max_density * 2.5).max(6.0).round() as u32;
+
+    println!("{}", style("Suggested Thresholds:").bold());
+    println!("  warn_threshold_per_100w: {}", suggested_warn);
+    println!("  fail_threshold_per_100w: {}", suggested_fail);
+    println!();
+
+    if !whitelist_candidates.is_empty() {
+        println!("{}", style("Phrases to Consider Whitelisting:").bold());
+        for (phrase, count) in whitelist_candidates.iter().take(20) {
+            println!("  - {} (appeared {} times)", style(phrase).cyan(), count);
+        }
+        println!();
+    }
+
+    // Write calibration file
+    let calibration = serde_yaml::to_string(&CalibrationOutput {
+        description: "Auto-generated calibration from good writing samples".into(),
+        source_files: files.len(),
+        total_words,
+        statistics: CalibrationStats {
+            avg_density_per_100w: avg_density,
+            max_density_per_100w: max_density,
+            avg_sentence_length: avg_sentence_length as f32,
+        },
+        suggested_scores: SuggestedScores {
+            warn_threshold_per_100w: suggested_warn,
+            fail_threshold_per_100w: suggested_fail,
+        },
+        whitelist_candidates: whitelist_candidates
+            .into_iter()
+            .take(50)
+            .map(|(p, c)| WhitelistCandidate {
+                phrase: p,
+                count: c,
+            })
+            .collect(),
+        category_distribution: category_counts,
+    })?;
+
+    fs::write(&args.output, calibration)?;
+    println!(
+        "{}",
+        style(format!("Wrote calibration to: {}", args.output.display())).green()
+    );
+
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct CalibrationOutput {
+    description: String,
+    source_files: usize,
+    total_words: usize,
+    statistics: CalibrationStats,
+    suggested_scores: SuggestedScores,
+    whitelist_candidates: Vec<WhitelistCandidate>,
+    category_distribution: BTreeMap<Category, usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct CalibrationStats {
+    avg_density_per_100w: f32,
+    max_density_per_100w: f32,
+    avg_sentence_length: f32,
+}
+
+#[derive(Debug, Serialize)]
+struct SuggestedScores {
+    warn_threshold_per_100w: u32,
+    fail_threshold_per_100w: u32,
+}
+
+#[derive(Debug, Serialize)]
+struct WhitelistCandidate {
+    phrase: String,
+    count: usize,
 }
 
 fn collect_comment_files(

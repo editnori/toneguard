@@ -1,10 +1,12 @@
-version: 0.1.37
+version: 0.1.38
 heading_style: sentence-case
 quote_style: straight
 limits:
   em_dashes_per_paragraph: 1
   connectors_per_sentence: 1
   rule_of_three_per_paragraph: 0
+  bold_spans_per_paragraph: 3
+  bold_lead_bullets_per_list: 3
 scores:
   warn_threshold_per_100w: 3
   fail_threshold_per_100w: 6
@@ -81,6 +83,11 @@ buzzwords:
     - unprecedented
     - plethora
     - empower
+    - comprehensive
+    - streamlined
+    - scalable
+    - actionable insights
+    - data-driven
 transitions:
   throttle:
     - furthermore
@@ -102,6 +109,11 @@ transitions:
     - significantly
     - remarkably
     - notably
+    - additionally
+    - in other words
+    - on the other hand
+    - in contrast
+    - to summarize
 puffery:
   ban:
     - rich cultural heritage
@@ -159,6 +171,30 @@ templates:
     - "\baims to explore\b"
     - "\btoday’s fast-paced world\b"
     - "\btoday's fast-paced world\b"
+    - "(?m)^subject:"
+    - "(?m)^re:"
+    - "\bas an ai language model\b"
+    - "\bas a language model\b"
+    - "\bmy (?:knowledge|training) (?:cutoff|cut-off)\b"
+    - "\bi (?:do not|don't) have access\b"
+    - "\bi (?:do not|don't) have the ability\b"
+    - "\bi cannot access\b"
+    - "\bi hope this helps\b"
+    - "\blet me know if you have any questions\b"
+    - "\bfeel free to reach out\b"
+    - "\bin this (?:article|post)\b"
+    - "\bthis (?:article|post) (?:covers|explores|will cover)\b"
+    - "\blet's dive in\b"
+    - "\bas technology continues to evolve\b"
+    - "\bin an? ever-evolving (?:world|landscape|industry)\b"
+    - "\bin the modern (?:world|era)\b"
+    - "\bat the end of the day\b"
+    - "\bthe following (?:section|sections) (?:covers|cover|will cover)\b"
+    - "\bchallenges and opportunities\b"
+    - "\bfuture (?:outlook|directions|prospects)\b"
+    - "\bdespite these challenges\b"
+    - "\blooking ahead\b"
+    - "\bkey takeaways?\b"
 weasel:
   ban:
     - some critics argue
@@ -168,6 +204,14 @@ weasel:
     - it should be mentioned that
     - it is worth considering that
     - it could be suggested that
+    - many experts believe
+    - it is widely believed
+    - it is often said
+    - some would argue
+    - various sources suggest
+    - some sources say
+    - research suggests
+    - studies show
 marketing_cliches:
   ban:
     - unlock the power of
