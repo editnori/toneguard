@@ -1,54 +1,111 @@
-﻿# ToneGuard VS Code extension
+﻿# ToneGuard VS Code Extension
 
-## Overview
-The ToneGuard VS Code extension connects to the `dwg-lsp` language server and surfaces deterministic writing diagnostics inside the editor. It keeps the analyzer hot in memory, updates diagnostics on edits, and provides quick fixes like `<!-- dwg:ignore-line -->`.
+**Zero-setup AI slop detection for Markdown.** Highlights generic, AI-style writing patterns instantly.
 
-## Quickstart
-1. Install the language server globally (once per machine):
-   `cargo install dwg-lsp --force`
-2. Grab the latest `toneguard-*.vsix` from the releases page, or build it yourself:
+## Features
 
-   ```bash
-   git clone https://github.com/editnori/toneguard.git
-   cd toneguard/vscode-extension
-   bun install
-   bun run compile
-   bunx @vscode/vsce package
-   ```
+- **Zero Configuration Required** — Works immediately after install
+- **Bundled Language Server** — Pre-compiled binaries for Windows, macOS, and Linux
+- **Smart Defaults** — Built-in detection rules tuned for common AI writing patterns
+- **Quick Fixes** — One-click ignore for false positives
+- **Real-time Feedback** — Diagnostics update as you type
 
-3. Open VS Code → **Extensions → Install from VSIX…** and choose the downloaded (or freshly built) package.
+## Quick Start
 
-After step 1 the server binary lives in `%USERPROFILE%\.cargo\bin\dwg-lsp.exe`, which is already on VS Code's PATH. Unless you relocate it, leave `dwg.command` at the default (`dwg-lsp`).
+1. **Install from Marketplace** — Search "ToneGuard" in VS Code Extensions
+2. **Open any Markdown file** — Diagnostics appear automatically
+3. **That's it!** — No configuration needed
 
-### Useful CLI commands
-The extension uses `dwg-lsp` for in-editor diagnostics. You can still script the CLI alongside editor usage:
+## What It Detects
 
-- `dwg-cli --config layth-style.yml --strict .` – full workspace lint with repo hygiene.
-- `dwg-cli --json --config layth-style.yml README.md` – machine-readable output for a single file.
-- `dwg-cli comments src/ --config layth-style.yml` – comment hygiene report (add `--strip` to delete eligible comments).
-- `dwg-cli --profile readme --only structure,marketing README.md` – force a profile and limit categories.
-- `dwg-cli --no-repo-checks docs/` – skip repo hygiene when you only want document diagnostics.
+ToneGuard identifies common AI writing patterns:
 
-## Dependencies
-Install the extension prerequisites before building:
-- [Bun](https://bun.sh) (recommended) or Node.js 18+.
-- Rust 1.75+ when you build the CLI locally.
-- `@vscode/vsce` for packaging a VSIX.
+| Category | Examples |
+|----------|----------|
+| **Buzzwords** | "leverage", "robust", "seamless", "cutting-edge" |
+| **Puffery** | "world-class", "industry-leading", "best-in-class" |
+| **Templates** | "In this article, we will...", "Let's dive in..." |
+| **Weasel Words** | "some experts say", "studies have shown" |
+| **Marketing Clichés** | "game-changer", "paradigm shift", "synergy" |
+| **Formatting Slop** | Emoji bullets, excessive bold, mid-sentence questions |
 
-## Configuration
-Tweak behaviour from VS Code settings or `settings.json`:
-- `dwg.command`: absolute path to the `dwg-lsp` server binary.
-- `dwg.configPath`: repository-relative path to `layth-style.yml`.
-- `dwg.profile`: force a profile for all files (overrides glob matching).
-- `dwg.onlyCategories` / `dwg.enableCategories` / `dwg.disableCategories`: filter which categories are surfaced.
+## Configuration (Optional)
 
-Use the "ToneGuard: Lint Workspace" command to refresh diagnostics for open files.
+ToneGuard works out of the box, but you can customize it:
 
-## Running tests
-The extension reuses the CLI test suite. Run `cargo test` at the workspace root, then execute `bun run compile` inside `vscode-extension/` to ensure the TypeScript build succeeds.
+### Workspace Config
+
+Add a `layth-style.yml` to your project root for custom rules:
+
+```yaml
+# Example: Disable transition warnings
+limits:
+  transitions_per_section: 10
+  
+# Add project-specific whitelisted terms
+whitelist:
+  buzzwords:
+    - "kubernetes"  # Technical term, not slop
+```
+
+### VS Code Settings
+
+| Setting | Description |
+|---------|-------------|
+| `dwg.configPath` | Path to custom config (defaults to workspace `layth-style.yml`) |
+| `dwg.profile` | Force a specific profile for all files |
+| `dwg.disableCategories` | Hide specific diagnostic categories |
+| `dwg.enableCategories` | Show additional categories |
+
+## Commands
+
+- **ToneGuard: Lint Workspace** — Refresh diagnostics for all open files
+- **ToneGuard: Show Server Info** — Display active server and config paths
+
+## Ignoring False Positives
+
+### Inline Ignore
+
+```markdown
+This sentence uses robust technology. <!-- dwg:ignore-line -->
+```
+
+### Block Ignore
+
+```markdown
+<!-- dwg:ignore buzzword, puffery -->
+This marketing content won't be flagged for buzzwords or puffery.
+<!-- dwg:end-ignore -->
+```
+
+## CLI Usage
+
+For CI/CD or batch processing, install the CLI:
+
+```bash
+cargo install dwg-cli
+dwg-cli --config layth-style.yml --strict docs/
+```
+
+## Requirements
+
+- VS Code 1.86.0 or later
+- Windows (x64), macOS (Intel/Apple Silicon), or Linux (x64/arm64)
+
+## Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| No diagnostics | Run "ToneGuard: Show Server Info" to check status |
+| Server not found | Extension includes bundled binary — reinstall if missing |
+| Custom config not loading | Check `dwg.configPath` setting and file existence |
 
 ## License
-This extension ships under the MIT License. See the repository `LICENSE` file for details.
 
-## Contributing
-Open an issue or pull request with focused changes. Please run `cargo fmt`, `cargo test`, and `bun run compile` before submitting.
+MIT License. See [LICENSE](https://github.com/editnori/toneguard/blob/main/LICENSE).
+
+## Links
+
+- [GitHub Repository](https://github.com/editnori/toneguard)
+- [Issue Tracker](https://github.com/editnori/toneguard/issues)
+- [Full Documentation](https://github.com/editnori/toneguard#readme)

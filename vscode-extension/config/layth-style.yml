@@ -1,0 +1,436 @@
+version: 0.1.38
+heading_style: sentence-case
+quote_style: straight
+limits:
+  em_dashes_per_paragraph: 1
+  connectors_per_sentence: 1
+  rule_of_three_per_paragraph: 0
+  bold_spans_per_paragraph: 3
+  bold_lead_bullets_per_list: 3
+scores:
+  warn_threshold_per_100w: 3
+  fail_threshold_per_100w: 6
+whitelist:
+  allowed_typos:
+    - detmerinsitc
+    - analye
+    - parallesl
+  allowed_phrases:
+    - and then
+    - just ship it
+    - we move on
+buzzwords:
+  throttle:
+    - delve
+    - delve into
+    - deep dive
+    - leverage
+    - utilise
+    - utilize
+    - facilitate
+    - optimise
+    - optimize
+    - embark
+    - embark on a journey
+    - underscore
+    - aims to explore
+    - aligns
+    - pivotal
+    - vital
+    - robust
+    - innovative
+    - seamless
+    - exemplary
+    - ever-evolving
+    - multifaceted
+    - groundbreaking
+    - holistic
+    - dynamic
+    - paradigm-shifting
+    - landscape
+    - realm
+    - tapestry
+    - efficiency
+    - transformation
+    - synergy
+    - paradigm
+    - roadmap
+    - ecosystem
+    - journey
+    - bandwidth
+    - stakeholder
+    - best practices
+    - strategic implementation
+    - deliverables
+    - adoption rate
+    - capacity building
+    - kpi
+    - proof of concept
+    - cutting-edge
+    - game-changing
+    - next-generation
+    - revolutionary
+    - state-of-the-art
+    - ai-powered
+    - robustly
+    - seamlessly
+    - significantly
+    - notably
+    - fundamentally
+    - inherently
+    - transformative
+    - journey of
+    - unprecedented
+    - plethora
+    - empower
+    - comprehensive
+    - streamlined
+    - scalable
+    - actionable insights
+    - data-driven
+transitions:
+  throttle:
+    - furthermore
+    - moreover
+    - consequently
+    - thus
+    - accordingly
+    - nonetheless
+    - subsequently
+    - therefore
+    - at the same time
+    - to that end
+    - in addition to
+    - alongside this
+    - as a result
+    - in fact
+    - in essence
+    - in summary
+    - significantly
+    - remarkably
+    - notably
+    - additionally
+    - in other words
+    - on the other hand
+    - in contrast
+    - to summarize
+puffery:
+  ban:
+    - rich cultural heritage
+    - vibrant cultural heritage
+    - cultural tapestry
+    - breathtaking
+    - must-visit
+    - must-see
+    - stunning natural beauty
+    - enduring legacy
+    - lasting legacy
+    - nestled
+    - in the heart of
+    - stands as a symbol of
+    - stands as a testament
+    - plays a pivotal role in
+    - leaves a lasting impact
+    - hallmark of innovation
+    - gateway to
+    - thriving ecosystem
+    - vibrant ecosystem
+    - groundbreaking innovation
+    - unparalleled excellence
+    - a seamless journey
+    - a diverse tapestry
+    - ultimate solution
+    - one-stop shop
+    - all-in-one platform
+    - future-proof
+    - game-changing
+    - trusted by leading brands
+templates:
+  ban:
+    - "^In conclusion"
+    - "^Overall"
+    - "^In summary"
+    - "^In essence"
+    - "^Future prospects include"
+    - "^In today’s fast-paced world"
+    - "^In today's fast-paced world"
+    - "^In today’s ever-evolving world"
+    - "^In today's ever-evolving world"
+    - "\bit is worth noting\b"
+    - "\bit is important to note\b"
+    - "\bit should be mentioned\b"
+    - "\bit is worth considering\b"
+    - "\bone might argue\b"
+    - "\bone could contend\b"
+    - "\bbased on the information provided\b"
+    - "\baccording to the data\b"
+    - "\bevidently, this suggests\b"
+    - "\bnot (?:just|only)\b.+\bbut (?:also|rather)\b"
+    - "\bno [^,.;]+, no [^,.;]+, just [^,.;]+"
+    - "\bplay(?:s)? a significant role in shaping\b"
+    - "\baims to explore\b"
+    - "\btoday’s fast-paced world\b"
+    - "\btoday's fast-paced world\b"
+    - "(?m)^subject:"
+    - "(?m)^re:"
+    - "\bas an ai language model\b"
+    - "\bas a language model\b"
+    - "\bmy (?:knowledge|training) (?:cutoff|cut-off)\b"
+    - "\bi (?:do not|don't) have access\b"
+    - "\bi (?:do not|don't) have the ability\b"
+    - "\bi cannot access\b"
+    - "\bi hope this helps\b"
+    - "\blet me know if you have any questions\b"
+    - "\bfeel free to reach out\b"
+    - "\bin this (?:article|post)\b"
+    - "\bthis (?:article|post) (?:covers|explores|will cover)\b"
+    - "\blet's dive in\b"
+    - "\bas technology continues to evolve\b"
+    - "\bin an? ever-evolving (?:world|landscape|industry)\b"
+    - "\bin the modern (?:world|era)\b"
+    - "\bat the end of the day\b"
+    - "\bthe following (?:section|sections) (?:covers|cover|will cover)\b"
+    - "\bchallenges and opportunities\b"
+    - "\bfuture (?:outlook|directions|prospects)\b"
+    - "\bdespite these challenges\b"
+    - "\blooking ahead\b"
+    - "\bkey takeaways?\b"
+weasel:
+  ban:
+    - some critics argue
+    - experts say
+    - observers noted
+    - industry reports show
+    - it should be mentioned that
+    - it is worth considering that
+    - it could be suggested that
+    - many experts believe
+    - it is widely believed
+    - it is often said
+    - some would argue
+    - various sources suggest
+    - some sources say
+    - research suggests
+    - studies show
+marketing_cliches:
+  ban:
+    - unlock the power of
+    - revolutionise the way
+    - revolutionize the way
+    - take your business to the next level
+    - game-changing solution
+    - unparalleled excellence
+    - cutting-edge technology
+    - seamlessly integrated
+    - state-of-the-art
+    - disruptive innovation
+    - next-generation
+    - seamless experience
+    - delightful experience
+    - unlock your potential
+    - empower your
+    - limited time offer
+    - don’t miss out
+    - don't miss out
+    - act now
+profile_defaults:
+  max_sentence_length: 28
+  max_duplicate_sentences: 1
+  max_exclamations_per_paragraph: 1
+  question_lead_limit: 1
+  call_to_action_phrases:
+    - start your free trial
+    - try it free
+    - get started for free
+    - download today
+    - get started now
+    - join thousands
+    - join the revolution
+    - book a demo
+    - contact sales
+    - subscribe now
+    - join the waitlist
+    - reserve your spot
+    - apply now
+    - get early access
+    - limited seats
+    - act now
+    - unlock access
+    - claim your offer
+  cadence_starts:
+    - we
+    - our
+    - toneguard
+  cadence_limit: 2
+  broad_terms:
+    - solution
+    - platform
+    - ecosystem
+    - experience
+    - vision
+    - mission
+    - innovation
+    - framework
+    - learnings
+    - journey
+  confidence_phrases:
+    - industry-leading
+    - world-class
+    - unrivaled
+    - leading provider
+    - best-in-class
+    - top-tier
+    - number one
+    - unmatched
+    - trusted by leading brands
+profiles:
+  - name: readme
+    globs:
+      - "**/README.md"
+    rules:
+      max_headings: 20
+      min_sentences_per_section: 2
+      min_code_blocks: 1
+      enable_triad_slop: true
+      required_headings:
+        - overview
+        - quickstart
+        - dependencies
+        - configuration
+        - running tests
+        - license
+        - contributing
+      banned_headings:
+        - success stories
+        - testimonials
+        - why choose us
+        - future-proof
+        - customer love
+        - press
+      forbidden_patterns:
+        - "(?i)^#+\\s+(success stories|testimonials|why choose us|press)"
+  - name: ticket
+    globs:
+      - "tickets/**/*.md"
+      - ".github/ISSUE_TEMPLATE/**/*.md"
+    rules:
+      max_headings: 8
+      min_sentences_per_section: 2
+      enable_triad_slop: true
+      required_headings:
+        - summary
+        - status
+        - owner
+        - acceptance criteria
+        - scope
+        - out-of-scope
+        - dependencies
+        - risk
+        - qa
+      call_to_action_phrases:
+        - submit your approval
+        - start your free trial
+        - contact sales
+  - name: rfc
+    globs:
+      - "rfc/**/*.md"
+      - "**/RFC*.md"
+      - "**/design-doc*.md"
+    rules:
+      min_sentences_per_section: 2
+      min_code_blocks: 1
+      enable_triad_slop: true
+      required_headings:
+        - problem
+        - goals
+        - non-goals
+        - proposed design
+        - alternatives
+        - risks
+        - rollout
+        - migration
+        - metrics
+        - success
+        - references
+        - appendix
+  - name: adr
+    globs:
+      - "adr/**/*.md"
+      - "**/ADR*.md"
+    rules:
+      min_sentences_per_section: 2
+      enable_triad_slop: true
+      required_headings:
+        - context
+        - decision
+        - consequences
+        - status
+        - date
+  - name: postmortem
+    globs:
+      - "incidents/**/*.md"
+      - "**/postmortem*.md"
+      - "**/retro*.md"
+    rules:
+      min_sentences_per_section: 2
+      enable_triad_slop: true
+      required_headings:
+        - summary
+        - impact
+        - timeline
+        - root cause
+        - detection
+        - resolution
+        - action items
+        - lessons learned
+  - name: changelog
+    globs:
+      - "CHANGELOG.md"
+      - "changelog/**/*.md"
+    rules:
+      required_patterns:
+        - "^##?\\s*\\[?v?\\d+\\.\\d+\\.\\d+"
+      forbidden_patterns:
+        - "(?i)world-class|fastest ever|revolutionary"
+  - name: api-docs
+    globs:
+      - "api/**/*.md"
+      - "**/api/*.md"
+    rules:
+      required_headings:
+        - summary
+        - method
+        - path
+        - parameters
+        - request
+        - response
+        - errors
+        - rate limit
+        - version
+        - deprecation
+repo_rules:
+  ignore_globs:
+    - "vendor/**"
+    - "third_party/**"
+    - "node_modules/**"
+    - "**/node_modules/**"
+    - "**/*.min.*"
+    - "dist/**"
+    - "build/**"
+    - "**/dist/**"
+    - "**/build/**"
+    - "**/.git/**"
+    - "target/**"
+    - "**/target/**"
+    - "**/out/**"
+    - "**/coverage/**"
+    - "**/.idea/**"
+    - ".vscode"
+    - ".vscode/**"
+    - "**/.vscode"
+    - "**/.vscode/**"
+comment_policy:
+  enabled: false
+  max_ratio: 0.05
+  ignore_globs: []
+  allow_globs: []

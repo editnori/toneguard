@@ -1,8 +1,8 @@
 {
   "name": "toneguard",
   "displayName": "ToneGuard",
-  "description": "Highlights AI-style writing patterns using the ToneGuard language server.",
-  "version": "0.1.38",
+  "description": "Zero-setup AI slop detection for Markdown. Highlights generic, AI-style writing patterns instantly.",
+  "version": "0.1.39",
   "publisher": "editnori",
   "icon": "icon.png",
   "engines": {
@@ -10,6 +10,15 @@
   },
   "categories": [
     "Linters"
+  ],
+  "keywords": [
+    "ai",
+    "slop",
+    "writing",
+    "markdown",
+    "linter",
+    "style",
+    "tone"
   ],
   "activationEvents": [
     "onStartupFinished",
@@ -27,6 +36,11 @@
         "command": "dwg.lintWorkspace",
         "title": "ToneGuard: Lint Workspace",
         "category": "ToneGuard"
+      },
+      {
+        "command": "dwg.showInfo",
+        "title": "ToneGuard: Show Server Info",
+        "category": "ToneGuard"
       }
     ],
     "configuration": {
@@ -34,13 +48,13 @@
       "properties": {
         "dwg.command": {
           "type": "string",
-          "default": "dwg-lsp",
-          "description": "Executable for the ToneGuard language server (typically dwg-lsp)."
+          "default": "",
+          "markdownDescription": "Path to the ToneGuard language server. Leave empty to use bundled binary (recommended). Set to `dwg-lsp` to use a manually installed version from PATH."
         },
         "dwg.configPath": {
           "type": "string",
-          "default": "layth-style.yml",
-          "description": "Path to the DWG configuration file."
+          "default": "",
+          "markdownDescription": "Path to custom config file. Leave empty to use bundled defaults or workspace `layth-style.yml`."
         },
         "dwg.debounceMs": {
           "type": "number",
@@ -223,8 +237,17 @@
   "scripts": {
     "compile": "tsc -p tsconfig.json",
     "lint": "eslint src --ext ts",
-    "package": "vsce package"
+    "prepackage": "bun run convert-icon.js",
+    "package": "bunx @vscode/vsce package --no-dependencies"
   },
+  "files": [
+    "out/**/*",
+    "bin/**/*",
+    "config/**/*",
+    "icon.png",
+    "README.md",
+    "LICENSE"
+  ],
   "dependencies": {
     "vscode-languageclient": "^9.0.1"
   },

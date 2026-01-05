@@ -1,0 +1,38 @@
+# Source files (only need compiled output)
+src/**
+*.ts
+tsconfig.json
+
+# Development files
+.eslintrc*
+*.map
+
+# Dependencies (installed at runtime)
+node_modules/**
+
+# Git
+.git/**
+.gitignore
+
+# Build tools
+bun.lock
+package-lock.json
+
+# Test files
+test/**
+**/*.test.ts
+
+# Other unnecessary files
+.vscode/**
+*.vsix
+convert-icon.js
+icon.svg
+icon-minimal.svg
+
+# Keep these (don't ignore):
+# - out/** (compiled extension)
+# - bin/** (bundled binaries)
+# - config/** (default config)
+# - icon.png
+# - README.md
+# - package.json

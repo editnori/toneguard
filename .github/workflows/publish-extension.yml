@@ -7,7 +7,84 @@ on:
   workflow_dispatch:  # Manual trigger option
 
 jobs:
+  # Build binaries for each platform
+  build-binaries:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            platform: linux-x64
+            binary: dwg-lsp
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            platform: linux-arm64
+            binary: dwg-lsp
+            cross: true
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            platform: darwin-x64
+            binary: dwg-lsp
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            platform: darwin-arm64
+            binary: dwg-lsp
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform: win32-x64
+            binary: dwg-lsp.exe
+
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross (for cross-compilation)
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build with cross
+        if: matrix.cross
+        run: cross build --release --target ${{ matrix.target }} -p dwg-lsp
+
+      - name: Build natively
+        if: "!matrix.cross"
+        run: cargo build --release --target ${{ matrix.target }} -p dwg-lsp
+
+      - name: Create binary directory
+        shell: bash
+        run: mkdir -p vscode-extension/bin/${{ matrix.platform }}
+
+      - name: Copy binary (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          cp target/${{ matrix.target }}/release/${{ matrix.binary }} vscode-extension/bin/${{ matrix.platform }}/
+          chmod +x vscode-extension/bin/${{ matrix.platform }}/${{ matrix.binary }}
+
+      - name: Copy binary (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: cp target/${{ matrix.target }}/release/${{ matrix.binary }} vscode-extension/bin/${{ matrix.platform }}/
+
+      - name: Strip binary (Unix only)
+        if: matrix.os != 'windows-latest'
+        run: strip vscode-extension/bin/${{ matrix.platform }}/${{ matrix.binary }} || true
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.platform }}
+          path: vscode-extension/bin/${{ matrix.platform }}/${{ matrix.binary }}
+
+  # Package and publish the extension with all binaries
   publish:
+    needs: build-binaries
     runs-on: ubuntu-latest
     
     steps:
@@ -19,10 +96,64 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Create bin directories
+        run: |
+          mkdir -p vscode-extension/bin/linux-x64
+          mkdir -p vscode-extension/bin/linux-arm64
+          mkdir -p vscode-extension/bin/darwin-x64
+          mkdir -p vscode-extension/bin/darwin-arm64
+          mkdir -p vscode-extension/bin/win32-x64
 
-      - name: Install dependencies
+      - name: Download Linux x64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: binary-linux-x64
+          path: vscode-extension/bin/linux-x64/
+
+      - name: Download Linux arm64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: binary-linux-arm64
+          path: vscode-extension/bin/linux-arm64/
+
+      - name: Download macOS x64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: binary-darwin-x64
+          path: vscode-extension/bin/darwin-x64/
+
+      - name: Download macOS arm64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: binary-darwin-arm64
+          path: vscode-extension/bin/darwin-arm64/
+
+      - name: Download Windows x64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: binary-win32-x64
+          path: vscode-extension/bin/win32-x64/
+
+      - name: Set executable permissions
+        run: |
+          chmod +x vscode-extension/bin/linux-x64/dwg-lsp || true
+          chmod +x vscode-extension/bin/linux-arm64/dwg-lsp || true
+          chmod +x vscode-extension/bin/darwin-x64/dwg-lsp || true
+          chmod +x vscode-extension/bin/darwin-arm64/dwg-lsp || true
+
+      - name: Copy default config
+        run: |
+          mkdir -p vscode-extension/config
+          cp layth-style.yml vscode-extension/config/
+
+      - name: Show bundled files
+        run: |
+          echo "=== Bundled binaries ==="
+          find vscode-extension/bin -type f -exec ls -lh {} \;
+          echo "=== Bundled config ==="
+          ls -la vscode-extension/config/
+
+      - name: Install extension dependencies
         working-directory: vscode-extension
         run: bun install
 
@@ -33,6 +164,10 @@ jobs:
       - name: Package extension
         working-directory: vscode-extension
         run: bunx @vscode/vsce package --no-dependencies
+
+      - name: Show package size
+        working-directory: vscode-extension
+        run: ls -lh *.vsix
 
       - name: Publish to VS Code Marketplace
         working-directory: vscode-extension
