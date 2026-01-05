@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="shieldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#3b82f6;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1d4ed8;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="penGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#f8fafc;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#e2e8f0;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Subtle outer glow -->
+  <ellipse cx="64" cy="68" rx="48" ry="52" fill="#3b82f6" opacity="0.08"/>
+  
+  <!-- Shield body - minimal rounded shape -->
+  <path d="M64 12 
+           C88 12 104 24 104 40 
+           L104 58 
+           C104 82 86 102 64 116 
+           C42 102 24 82 24 58 
+           L24 40 
+           C24 24 40 12 64 12 Z" 
+        fill="url(#shieldGrad)" 
+        stroke="#1e40af" 
+        stroke-width="1.5"
+        opacity="0.95"/>
+  
+  <!-- Inner shield highlight -->
+  <path d="M64 18 
+           C84 18 98 28 98 42 
+           L98 57 
+           C98 78 82 96 64 108 
+           C46 96 30 78 30 57 
+           L30 42 
+           C30 28 44 18 64 18 Z" 
+        fill="none" 
+        stroke="#60a5fa" 
+        stroke-width="0.75"
+        opacity="0.5"/>
+  
+  <!-- Stylized "T" made of writing lines -->
+  <g transform="translate(64, 58)">
+    <!-- Horizontal bar of T -->
+    <rect x="-22" y="-18" width="44" height="4" rx="2" fill="url(#penGrad)" opacity="0.95"/>
+    
+    <!-- Vertical stem of T -->
+    <rect x="-3" y="-14" width="6" height="36" rx="3" fill="url(#penGrad)" opacity="0.95"/>
+    
+    <!-- Subtle writing lines (representing guarded text) -->
+    <rect x="-18" y="28" width="12" height="2" rx="1" fill="#93c5fd" opacity="0.6"/>
+    <rect x="-2" y="28" width="20" height="2" rx="1" fill="#93c5fd" opacity="0.6"/>
+    <rect x="-18" y="34" width="24" height="2" rx="1" fill="#93c5fd" opacity="0.4"/>
+    <rect x="10" y="34" width="8" height="2" rx="1" fill="#93c5fd" opacity="0.4"/>
+  </g>
+  
+  <!-- Subtle checkmark accent -->
+  <path d="M76 45 L82 52 L94 38" 
+        fill="none" 
+        stroke="#34d399" 
+        stroke-width="3" 
+        stroke-linecap="round" 
+        stroke-linejoin="round"
+        opacity="0.85"/>
+</svg>

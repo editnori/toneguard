@@ -4,6 +4,7 @@
   "description": "Highlights AI-style writing patterns using the ToneGuard language server.",
   "version": "0.1.38",
   "publisher": "editnori",
+  "icon": "icon-minimal.svg",
   "engines": {
     "vscode": "^1.86.0"
   },

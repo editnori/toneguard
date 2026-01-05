@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- Ultra-minimal ToneGuard logo -->
+  
+  <!-- Subtle shield silhouette -->
+  <path d="M64 8 
+           C92 8 108 22 108 42 
+           L108 60 
+           C108 88 84 110 64 120 
+           C44 110 20 88 20 60 
+           L20 42 
+           C20 22 36 8 64 8 Z" 
+        fill="#2563eb"/>
+  
+  <!-- Clean T letterform -->
+  <g fill="#ffffff">
+    <!-- Horizontal stroke -->
+    <rect x="38" y="36" width="52" height="8" rx="4"/>
+    <!-- Vertical stem -->
+    <rect x="56" y="44" width="16" height="48" rx="4"/>
+  </g>
+  
+  <!-- Subtle guard accent line -->
+  <path d="M64 100 C48 92 34 76 34 60" 
+        fill="none" 
+        stroke="#60a5fa" 
+        stroke-width="2" 
+        stroke-linecap="round"
+        opacity="0.6"/>
+</svg>
