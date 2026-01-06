@@ -2,7 +2,7 @@
   "name": "toneguard",
   "displayName": "ToneGuard",
   "description": "Zero-setup AI slop detection for Markdown. Highlights generic, AI-style writing patterns instantly.",
-  "version": "0.1.47",
+  "version": "0.1.48",
   "publisher": "editnori",
   "icon": "icon.png",
   "engines": {
@@ -38,6 +38,23 @@
     "url": "https://github.com/editnori/toneguard"
   },
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "toneguard",
+          "title": "ToneGuard",
+          "icon": "icon.png"
+        }
+      ]
+    },
+    "views": {
+      "toneguard": [
+        {
+          "id": "toneguard.sidebar",
+          "name": "Overview"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "dwg.lintWorkspace",
@@ -57,6 +74,21 @@
       {
         "command": "dwg.flowNew",
         "title": "ToneGuard: New Flow Spec",
+        "category": "ToneGuard"
+      },
+      {
+        "command": "dwg.refreshSidebar",
+        "title": "ToneGuard: Refresh Sidebar",
+        "category": "ToneGuard"
+      },
+      {
+        "command": "dwg.openFlowAuditReport",
+        "title": "ToneGuard: Open Flow Audit Report",
+        "category": "ToneGuard"
+      },
+      {
+        "command": "dwg.openFlowProposalReport",
+        "title": "ToneGuard: Open Flow Proposal",
         "category": "ToneGuard"
       },
       {

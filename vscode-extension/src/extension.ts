@@ -17,6 +17,14 @@ const SKILL_PROMPT_DISMISSED_KEY = 'toneguard.skillPromptDismissed';
 type AIEnvironment = 'claude' | 'codex' | null;
 type SkillKind = 'writing' | 'logic-flow';
 
+type SidebarNode =
+    | { kind: 'section'; id: 'actions' | 'reports' | 'findings' }
+    | { kind: 'info'; label: string; description?: string }
+    | { kind: 'action'; label: string; command: vscode.Command; description?: string }
+    | { kind: 'report'; label: string; path: string; command: vscode.Command }
+    | { kind: 'category'; category: string; count: number }
+    | { kind: 'finding'; finding: any };
+
 const SKILL_META: Record<
     SkillKind,
     { dirName: string; template: string; label: string; success: string }
@@ -34,6 +42,286 @@ const SKILL_META: Record<
         success: 'The AI will now follow ToneGuard logic flow guardrails.',
     },
 };
+
+function getWorkspaceRoot(): string | undefined {
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (!workspaceFolders || workspaceFolders.length === 0) {
+        return undefined;
+    }
+    return workspaceFolders[0].uri.fsPath;
+}
+
+function normalizeReportedPath(reported: string): string {
+    return reported.replace(/^[.][/\\\\]/, '').replace(/\\/g, '/');
+}
+
+class ToneGuardSidebarProvider implements vscode.TreeDataProvider<SidebarNode> {
+    private readonly onDidChangeEmitter = new vscode.EventEmitter<
+        SidebarNode | undefined
+    >();
+    readonly onDidChangeTreeData = this.onDidChangeEmitter.event;
+
+    refresh(): void {
+        this.onDidChangeEmitter.fire(undefined);
+    }
+
+    getTreeItem(element: SidebarNode): vscode.TreeItem {
+        if (element.kind === 'section') {
+            const label =
+                element.id === 'actions'
+                    ? 'Actions'
+                    : element.id === 'reports'
+                      ? 'Reports'
+                      : 'Findings';
+            const item = new vscode.TreeItem(
+                label,
+                vscode.TreeItemCollapsibleState.Expanded
+            );
+            item.contextValue = `toneguard.section.${element.id}`;
+            return item;
+        }
+
+        if (element.kind === 'info') {
+            const item = new vscode.TreeItem(
+                element.label,
+                vscode.TreeItemCollapsibleState.None
+            );
+            item.description = element.description;
+            item.contextValue = 'toneguard.info';
+            return item;
+        }
+
+        if (element.kind === 'action') {
+            const item = new vscode.TreeItem(
+                element.label,
+                vscode.TreeItemCollapsibleState.None
+            );
+            item.command = element.command;
+            item.description = element.description;
+            item.contextValue = 'toneguard.action';
+            return item;
+        }
+
+        if (element.kind === 'report') {
+            const item = new vscode.TreeItem(
+                element.label,
+                vscode.TreeItemCollapsibleState.None
+            );
+            item.command = element.command;
+            item.description = normalizeReportedPath(element.path);
+            item.contextValue = 'toneguard.report';
+            return item;
+        }
+
+        if (element.kind === 'category') {
+            const item = new vscode.TreeItem(
+                `${element.category} (${element.count})`,
+                element.count > 0
+                    ? vscode.TreeItemCollapsibleState.Collapsed
+                    : vscode.TreeItemCollapsibleState.None
+            );
+            item.contextValue = 'toneguard.category';
+            return item;
+        }
+
+        const finding = element.finding as any;
+        const path = typeof finding?.path === 'string' ? finding.path : '<unknown>';
+        const line = typeof finding?.line === 'number' ? finding.line : undefined;
+        const message =
+            typeof finding?.message === 'string' ? finding.message : 'Finding';
+        const category =
+            typeof finding?.category === 'string' ? finding.category : 'unknown';
+        const severity =
+            typeof finding?.severity === 'string' ? finding.severity : 'info';
+
+        const loc = line ? `:${line}` : '';
+        const label = message.length > 90 ? `${message.slice(0, 87)}...` : message;
+
+        const item = new vscode.TreeItem(
+            label,
+            vscode.TreeItemCollapsibleState.None
+        );
+        item.description = `${severity} · ${category} · ${normalizeReportedPath(path)}${loc}`;
+        item.tooltip = message;
+        item.command = {
+            command: 'dwg.openFindingLocation',
+            title: 'Open Finding',
+            arguments: [path, line],
+        };
+        item.contextValue = 'toneguard.finding';
+        return item;
+    }
+
+    async getChildren(element?: SidebarNode): Promise<SidebarNode[]> {
+        const root = getWorkspaceRoot();
+        if (!root) {
+            return [
+                {
+                    kind: 'info',
+                    label: 'Open a folder to enable ToneGuard',
+                    description: '',
+                },
+            ];
+        }
+
+        if (!element) {
+            return [
+                { kind: 'section', id: 'actions' },
+                { kind: 'section', id: 'reports' },
+                { kind: 'section', id: 'findings' },
+            ];
+        }
+
+        if (element.kind === 'section') {
+            if (element.id === 'actions') {
+                return [
+                    {
+                        kind: 'action',
+                        label: 'Run Flow Audit',
+                        command: { command: 'dwg.flowAudit', title: 'Flow Audit' },
+                    },
+                    {
+                        kind: 'action',
+                        label: 'Generate Flow Proposal (Markdown)',
+                        command: {
+                            command: 'dwg.flowPropose',
+                            title: 'Flow Propose',
+                        },
+                    },
+                    {
+                        kind: 'action',
+                        label: 'New Flow Spec',
+                        command: { command: 'dwg.flowNew', title: 'Flow New' },
+                    },
+                    {
+                        kind: 'action',
+                        label: 'Install Logic Flow Guardrails Skill',
+                        command: {
+                            command: 'dwg.installLogicFlowSkill',
+                            title: 'Install Logic Skill',
+                        },
+                    },
+                    {
+                        kind: 'action',
+                        label: 'Install Writing Style Skill',
+                        command: { command: 'dwg.installSkill', title: 'Install Skill' },
+                    },
+                    {
+                        kind: 'action',
+                        label: 'Refresh Sidebar',
+                        command: {
+                            command: 'dwg.refreshSidebar',
+                            title: 'Refresh Sidebar',
+                        },
+                    },
+                ];
+            }
+
+            if (element.id === 'reports') {
+                return [
+                    {
+                        kind: 'report',
+                        label: 'Open Flow Audit Report',
+                        path: 'reports/flow-audit.json',
+                        command: {
+                            command: 'dwg.openFlowAuditReport',
+                            title: 'Open Flow Audit Report',
+                        },
+                    },
+                    {
+                        kind: 'report',
+                        label: 'Open Flow Proposal',
+                        path: 'reports/flow-proposal.md',
+                        command: {
+                            command: 'dwg.openFlowProposalReport',
+                            title: 'Open Flow Proposal',
+                        },
+                    },
+                    {
+                        kind: 'action',
+                        label: 'Show Server Info',
+                        command: { command: 'dwg.showInfo', title: 'Show Info' },
+                    },
+                ];
+            }
+
+            const report = this.readAuditReport(root);
+            if (!report) {
+                return [
+                    {
+                        kind: 'action',
+                        label: 'No flow audit report found (run Flow Audit)',
+                        command: { command: 'dwg.flowAudit', title: 'Flow Audit' },
+                    },
+                ];
+            }
+
+            const findings = Array.isArray(report?.audit?.findings)
+                ? report.audit.findings
+                : [];
+            const counts = new Map<string, number>();
+            for (const finding of findings) {
+                const category =
+                    typeof finding?.category === 'string'
+                        ? finding.category
+                        : 'unknown';
+                counts.set(category, (counts.get(category) ?? 0) + 1);
+            }
+
+            const categories = Array.from(counts.entries()).sort((a, b) => {
+                if (b[1] !== a[1]) {
+                    return b[1] - a[1];
+                }
+                return a[0].localeCompare(b[0]);
+            });
+
+            if (categories.length === 0) {
+                return [
+                    {
+                        kind: 'action',
+                        label: 'No findings in last audit',
+                        command: { command: 'dwg.flowAudit', title: 'Flow Audit' },
+                    },
+                ];
+            }
+
+            return categories.map(([category, count]) => ({
+                kind: 'category',
+                category,
+                count,
+            }));
+        }
+
+        if (element.kind === 'category') {
+            const report = this.readAuditReport(root);
+            const findings = Array.isArray(report?.audit?.findings)
+                ? report.audit.findings
+                : [];
+            const categoryFindings = findings.filter(
+                (f: any) => typeof f?.category === 'string' && f.category === element.category
+            );
+            return categoryFindings.map((finding: any) => ({
+                kind: 'finding',
+                finding,
+            }));
+        }
+
+        return [];
+    }
+
+    private readAuditReport(workspaceRoot: string): any | undefined {
+        try {
+            const reportPath = path.join(workspaceRoot, 'reports', 'flow-audit.json');
+            if (!fs.existsSync(reportPath)) {
+                return undefined;
+            }
+            const text = fs.readFileSync(reportPath, 'utf8');
+            return JSON.parse(text);
+        } catch {
+            return undefined;
+        }
+    }
+}
 
 /**
  * Returns the platform-specific subdirectory name for bundled binaries.
@@ -351,6 +639,88 @@ export function activate(context: vscode.ExtensionContext): void {
     outputChannel.appendLine(`ToneGuard: Using server: ${command}`);
     outputChannel.appendLine(`ToneGuard: Using CLI: ${cliCommand}`);
     outputChannel.appendLine(`ToneGuard: Using config: ${configPath}`);
+
+    const sidebarProvider = new ToneGuardSidebarProvider();
+    context.subscriptions.push(
+        vscode.window.registerTreeDataProvider('toneguard.sidebar', sidebarProvider)
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand('dwg.refreshSidebar', () => {
+            sidebarProvider.refresh();
+        })
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand('dwg.openFlowAuditReport', async () => {
+            const root = getWorkspaceRoot();
+            if (!root) {
+                return;
+            }
+            const reportPath = path.join(root, 'reports', 'flow-audit.json');
+            if (!fs.existsSync(reportPath)) {
+                void vscode.window.showErrorMessage(
+                    'ToneGuard: reports/flow-audit.json not found. Run Flow Audit first.'
+                );
+                return;
+            }
+            const doc = await vscode.workspace.openTextDocument(reportPath);
+            await vscode.window.showTextDocument(doc, { preview: false });
+        })
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand('dwg.openFlowProposalReport', async () => {
+            const root = getWorkspaceRoot();
+            if (!root) {
+                return;
+            }
+            const reportPath = path.join(root, 'reports', 'flow-proposal.md');
+            if (!fs.existsSync(reportPath)) {
+                void vscode.window.showErrorMessage(
+                    'ToneGuard: reports/flow-proposal.md not found. Generate a proposal first.'
+                );
+                return;
+            }
+            const doc = await vscode.workspace.openTextDocument(reportPath);
+            await vscode.window.showTextDocument(doc, { preview: false });
+        })
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand(
+            'dwg.openFindingLocation',
+            async (reportedPath?: string, line?: number) => {
+                const root = getWorkspaceRoot();
+                if (!root || !reportedPath) {
+                    return;
+                }
+                const cleaned = normalizeReportedPath(String(reportedPath));
+                const abs = path.isAbsolute(cleaned)
+                    ? cleaned
+                    : path.join(root, cleaned);
+                if (!fs.existsSync(abs)) {
+                    void vscode.window.showErrorMessage(
+                        `ToneGuard: file not found: ${cleaned}`
+                    );
+                    return;
+                }
+                const doc = await vscode.workspace.openTextDocument(abs);
+                const editor = await vscode.window.showTextDocument(doc, {
+                    preview: false,
+                });
+                if (typeof line === 'number' && line > 0) {
+                    const pos = new vscode.Position(line - 1, 0);
+                    editor.selection = new vscode.Selection(pos, pos);
+                    editor.revealRange(new vscode.Range(pos, pos));
+                }
+            }
+        )
+    );
+
+    const auditWatcher = vscode.workspace.createFileSystemWatcher(
+        '**/reports/flow-audit.json'
+    );
+    auditWatcher.onDidCreate(() => sidebarProvider.refresh());
+    auditWatcher.onDidChange(() => sidebarProvider.refresh());
+    auditWatcher.onDidDelete(() => sidebarProvider.refresh());
+    context.subscriptions.push(auditWatcher);
 
     const serverOptions: ServerOptions = {
         command,

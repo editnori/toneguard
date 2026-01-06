@@ -9,6 +9,7 @@
 - **Smart Defaults** — Built-in detection rules tuned for common AI writing patterns
 - **Quick Fixes** — One-click ignore for false positives
 - **Real-time Feedback** — Diagnostics update as you type
+- **Sidebar Overview** — Run audits and browse findings from a dedicated ToneGuard panel
 
 ## Quick Start
 
