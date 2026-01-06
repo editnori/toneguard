@@ -2258,13 +2258,22 @@ async function fixWithAI(
         }
         
         if (!inserted) {
-            // Fallback: Copy to clipboard and open composer
+            // Fallback: Copy to clipboard and open composer, try to auto-paste
             await vscode.env.clipboard.writeText(prompt);
             try {
                 await vscode.commands.executeCommand('cursor.composer.new');
-                void vscode.window.showInformationMessage(
-                    `ToneGuard: ${findings.length} fix instructions copied. Paste in Composer (Cmd+V) to apply.`
-                );
+                // Wait for composer to be ready, then try to paste
+                await new Promise(resolve => setTimeout(resolve, 300));
+                try {
+                    await vscode.commands.executeCommand('editor.action.clipboardPasteAction');
+                    void vscode.window.showInformationMessage(
+                        `ToneGuard: ${findings.length} fix instructions pasted into Composer.`
+                    );
+                } catch {
+                    void vscode.window.showInformationMessage(
+                        `ToneGuard: ${findings.length} fix instructions copied. Press Cmd+V to paste.`
+                    );
+                }
             } catch {
                 // Can't even open composer, just inform user
                 void vscode.window.showInformationMessage(
@@ -2275,19 +2284,44 @@ async function fixWithAI(
         return;
     }
     
-    // For Claude/Codex: Copy to clipboard
+    // For Claude/Codex: Copy to clipboard and try to focus their terminal
     await vscode.env.clipboard.writeText(prompt);
     outputChannel.appendLine(`ToneGuard: Copied ${findings.length} fix instructions to clipboard`);
     
     if (env === 'claude') {
-        void vscode.window.showInformationMessage(
-            `ToneGuard: ${findings.length} fix instructions copied. Paste in Claude Code to apply.`
+        // Try to focus Claude terminal if it exists
+        const terminals = vscode.window.terminals;
+        const claudeTerminal = terminals.find(t => 
+            t.name.toLowerCase().includes('claude') || 
+            t.name.toLowerCase().includes('anthropic')
         );
+        if (claudeTerminal) {
+            claudeTerminal.show();
+            void vscode.window.showInformationMessage(
+                `ToneGuard: ${findings.length} fix instructions copied. Press Cmd+V in Claude terminal.`
+            );
+        } else {
+            void vscode.window.showInformationMessage(
+                `ToneGuard: ${findings.length} fix instructions copied. Paste in Claude Code to apply.`
+            );
+        }
     } else {
-        // For Codex
-        void vscode.window.showInformationMessage(
-            `ToneGuard: ${findings.length} fix instructions copied. Paste in ${getEnvDisplayName(env)} to apply.`
+        // For Codex - try to focus the terminal
+        const terminals = vscode.window.terminals;
+        const codexTerminal = terminals.find(t => 
+            t.name.toLowerCase().includes('codex') || 
+            t.name.toLowerCase().includes('openai')
         );
+        if (codexTerminal) {
+            codexTerminal.show();
+            void vscode.window.showInformationMessage(
+                `ToneGuard: ${findings.length} fix instructions copied. Press Cmd+V in Codex terminal.`
+            );
+        } else {
+            void vscode.window.showInformationMessage(
+                `ToneGuard: ${findings.length} fix instructions copied. Paste in ${getEnvDisplayName(env)} to apply.`
+            );
+        }
     }
 }
 
@@ -3529,6 +3563,13 @@ export function activate(context: vscode.ExtensionContext): void {
                 });
             }
 
+            // Create reports directory if needed
+            const reportsDir = path.join(workspaceRoot, 'reports');
+            if (!fs.existsSync(reportsDir)) {
+                fs.mkdirSync(reportsDir, { recursive: true });
+            }
+            const markdownLintPath = path.join(reportsDir, 'markdown-lint.json');
+
             try {
                 await vscode.window.withProgress(
                     {
@@ -3537,6 +3578,25 @@ export function activate(context: vscode.ExtensionContext): void {
                         cancellable: false,
                     },
                     async (progress) => {
+                        // Step 1: Lint markdown/prose files
+                        progress.report({ message: 'Scanning markdown files…' });
+                        try {
+                            await runCli(
+                                [
+                                    '--config',
+                                    configPath,
+                                    '--json',
+                                    '--no-repo-checks',
+                                    workspaceRoot,
+                                ],
+                                'Scanning markdown files…'
+                            );
+                        } catch {
+                            // Markdown lint may exit non-zero if issues found, that's OK
+                            outputChannel.appendLine('ToneGuard: Markdown scan complete (issues may exist)');
+                        }
+
+                        // Step 2: Run code flow audit  
                         progress.report({ message: 'Running flow audit…' });
                         const flowsDir = path.join(workspaceRoot, 'flows');
                         await runCli(
@@ -3554,6 +3614,7 @@ export function activate(context: vscode.ExtensionContext): void {
                             'Running flow audit…'
                         );
 
+                        // Step 3: Generate proposal
                         progress.report({ message: 'Generating flow proposal…' });
                         await runCli(
                             [
@@ -3588,7 +3649,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
                 if (findingCount === 0) {
                     void vscode.window.showInformationMessage(
-                        'ToneGuard: All clear! No issues found. 🎉'
+                        'ToneGuard: All clear! No issues found.'
                     );
                     return;
                 }
@@ -3611,10 +3672,21 @@ export function activate(context: vscode.ExtensionContext): void {
                     const prompt = generateFixPrompt(findings);
                     await vscode.env.clipboard.writeText(prompt);
                     try {
+                        // Open composer and try to auto-paste
                         await vscode.commands.executeCommand('cursor.composer.new');
-                        void vscode.window.showInformationMessage(
-                            'ToneGuard: Fix instructions copied. Paste in Composer to apply.'
-                        );
+                        // Wait for composer to be ready, then paste
+                        await new Promise(resolve => setTimeout(resolve, 300));
+                        try {
+                            await vscode.commands.executeCommand('editor.action.clipboardPasteAction');
+                            void vscode.window.showInformationMessage(
+                                `ToneGuard: ${findingCount} fix instructions pasted into Composer.`
+                            );
+                        } catch {
+                            // Paste failed, user needs to do it manually
+                            void vscode.window.showInformationMessage(
+                                'ToneGuard: Fix instructions copied. Press Cmd+V to paste in Composer.'
+                            );
+                        }
                     } catch {
                         void vscode.window.showInformationMessage(
                             'ToneGuard: Fix instructions copied. Open Composer (Cmd+I) and paste.'
@@ -3623,15 +3695,41 @@ export function activate(context: vscode.ExtensionContext): void {
                 } else if (choice === 'Fix with Claude') {
                     const prompt = generateFixPrompt(findings);
                     await vscode.env.clipboard.writeText(prompt);
-                    void vscode.window.showInformationMessage(
-                        'ToneGuard: Fix instructions copied. Paste in Claude Code to apply.'
+                    // Try to focus Claude Code terminal if it exists
+                    const terminals = vscode.window.terminals;
+                    const claudeTerminal = terminals.find(t => 
+                        t.name.toLowerCase().includes('claude') || 
+                        t.name.toLowerCase().includes('anthropic')
                     );
+                    if (claudeTerminal) {
+                        claudeTerminal.show();
+                        void vscode.window.showInformationMessage(
+                            `ToneGuard: ${findingCount} fix instructions copied. Press Cmd+V in Claude terminal.`
+                        );
+                    } else {
+                        void vscode.window.showInformationMessage(
+                            `ToneGuard: ${findingCount} fix instructions copied. Open Claude Code and paste.`
+                        );
+                    }
                 } else if (choice === 'Fix with Codex') {
                     const prompt = generateFixPrompt(findings);
                     await vscode.env.clipboard.writeText(prompt);
-                    void vscode.window.showInformationMessage(
-                        'ToneGuard: Fix instructions copied. Paste in Codex to apply.'
+                    // Try to focus Codex terminal if it exists
+                    const terminals = vscode.window.terminals;
+                    const codexTerminal = terminals.find(t => 
+                        t.name.toLowerCase().includes('codex') || 
+                        t.name.toLowerCase().includes('openai')
                     );
+                    if (codexTerminal) {
+                        codexTerminal.show();
+                        void vscode.window.showInformationMessage(
+                            `ToneGuard: ${findingCount} fix instructions copied. Press Cmd+V in Codex terminal.`
+                        );
+                    } else {
+                        void vscode.window.showInformationMessage(
+                            `ToneGuard: ${findingCount} fix instructions copied. Open Codex and paste.`
+                        );
+                    }
                 } else if (choice === 'Review Proposal') {
                     const doc = await vscode.workspace.openTextDocument(proposalPath);
                     await vscode.window.showTextDocument(doc, { preview: false });
