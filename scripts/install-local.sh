@@ -80,8 +80,13 @@ if command -v bun &> /dev/null; then
 
     if command -v code &> /dev/null; then
         echo "Installing VSIX via code..."
-        code --install-extension "$VSIX" --force
-        echo "VSIX installed."
+        if code --install-extension "$VSIX" --force; then
+            echo "VSIX installed."
+        else
+            echo "VSIX built but automatic install failed."
+            echo "Install manually via VS Code: Extensions \u2192 Install from VSIX..."
+            echo "VSIX path: $PROJECT_ROOT/vscode-extension/$VSIX"
+        fi
     else
         echo "VSIX built. Install manually via VS Code: Extensions → Install from VSIX..."
     fi
