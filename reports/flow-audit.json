@@ -45,6 +45,26 @@
         "category": "pass-through",
         "severity": "info",
         "confidence": "high",
+        "message": "Pass-through wrapper chain length 2: sentence_has_citation -> is_match",
+        "path": "core/src/lib.rs",
+        "line": 4015,
+        "symbol": "sentence_has_citation",
+        "language": "rust",
+        "evidence": [
+          "Forward-only functions: sentence_has_citation -> is_match"
+        ],
+        "fix_instructions": {
+          "action": "inline",
+          "description": "Inline `sentence_has_citation` by replacing calls with direct calls to `is_match`",
+          "find_pattern": "sentence_has_citation\\\\s*\\\\(",
+          "replace_pattern": "is_match(",
+          "alternative": "Add justification to flow spec with reason: isolation"
+        }
+      },
+      {
+        "category": "pass-through",
+        "severity": "info",
+        "confidence": "high",
         "message": "Pass-through wrapper chain length 2: sentence_has_specifics -> is_match",
         "path": "core/src/lib.rs",
         "line": 4011,
@@ -78,26 +98,6 @@
           "description": "Inline `is_emoji_hint` by replacing calls with direct calls to `contains`",
           "find_pattern": "is_emoji_hint\\\\s*\\\\(",
           "replace_pattern": "contains(",
-          "alternative": "Add justification to flow spec with reason: isolation"
-        }
-      },
-      {
-        "category": "pass-through",
-        "severity": "info",
-        "confidence": "high",
-        "message": "Pass-through wrapper chain length 2: sentence_has_citation -> is_match",
-        "path": "core/src/lib.rs",
-        "line": 4015,
-        "symbol": "sentence_has_citation",
-        "language": "rust",
-        "evidence": [
-          "Forward-only functions: sentence_has_citation -> is_match"
-        ],
-        "fix_instructions": {
-          "action": "inline",
-          "description": "Inline `sentence_has_citation` by replacing calls with direct calls to `is_match`",
-          "find_pattern": "sentence_has_citation\\\\s*\\\\(",
-          "replace_pattern": "is_match(",
           "alternative": "Add justification to flow spec with reason: isolation"
         }
       },

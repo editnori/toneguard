@@ -7,36 +7,40 @@ use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum Language {
+    #[default]
     Rust,
     TypeScript,
     JavaScript,
     Python,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum FindingCategory {
+    #[default]
     Placeholder,
     LonelyAbstraction,
     PassThrough,
     Duplication,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum FindingSeverity {
+    #[default]
     Info,
     Warning,
     Error,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum FindingConfidence {
     High,
+    #[default]
     Medium,
     Low,
 }
@@ -58,7 +62,7 @@ pub struct FixInstructions {
     pub alternative: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FlowFinding {
     pub category: FindingCategory,
     pub severity: FindingSeverity,
@@ -72,6 +76,24 @@ pub struct FlowFinding {
     /// Machine-readable fix instructions for AI agents
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fix_instructions: Option<FixInstructions>,
+    /// Confidence score from usage analysis (0.0-1.0)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence_score: Option<f32>,
+    /// Factors that contributed to the confidence score
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence_factors: Option<Vec<String>>,
+    /// Coverage info from test coverage data
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coverage_info: Option<CoverageContext>,
+}
+
+/// Coverage context for a finding
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoverageContext {
+    /// Whether the code is covered by tests
+    pub is_covered: bool,
+    /// Line coverage percentage for the file
+    pub file_coverage_pct: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -98,6 +120,12 @@ pub struct FlowAuditConfig {
     pub duplication_min_instances: usize,
     pub duplication_min_tokens: usize,
     pub duplication_max_groups: usize,
+    /// Path to coverage file (lcov.info, coverage.json, etc.)
+    pub coverage_file: Option<PathBuf>,
+    /// Minimum confidence score to include findings (0.0-1.0)
+    pub min_confidence: Option<f32>,
+    /// Whether to build and use symbol graph for usage analysis
+    pub use_symbol_graph: bool,
 }
 
 impl Default for FlowAuditConfig {
@@ -115,6 +143,9 @@ impl Default for FlowAuditConfig {
             duplication_min_instances: 3,
             duplication_min_tokens: 80,
             duplication_max_groups: 20,
+            coverage_file: None,
+            min_confidence: None,
+            use_symbol_graph: false,
         }
     }
 }
@@ -306,6 +337,9 @@ fn emit_duplication_findings(
                 replace_pattern: None,
                 alternative: Some("Add justification to flow spec with reason: reuse".into()),
             }),
+            confidence_score: None,
+            confidence_factors: None,
+            coverage_info: None,
         });
     }
 }
@@ -730,6 +764,9 @@ impl RustAggregate {
                         replace_pattern: None,
                         alternative: Some("Add justification to flow spec with reason: variation".into()),
                     }),
+                    confidence_score: None,
+                    confidence_factors: None,
+                    coverage_info: None,
                 });
             }
         }
@@ -780,6 +817,9 @@ impl RustAggregate {
                             replace_pattern: Some(format!("{}(", last_fn)),
                             alternative: Some("Add justification to flow spec with reason: isolation".into()),
                         }),
+                        confidence_score: None,
+                        confidence_factors: None,
+                        coverage_info: None,
                     });
                 }
             }
@@ -953,6 +993,9 @@ fn analyze_rust_file(path: &Path, text: &str) -> RustFileReport {
                             replace_pattern: None,
                             alternative: Some("Remove function if not needed, or add justification with reason: policy".into()),
                         }),
+                        confidence_score: None,
+                        confidence_factors: None,
+                        coverage_info: None,
                     });
                 }
             }
@@ -1016,6 +1059,9 @@ fn analyze_rust_file(path: &Path, text: &str) -> RustFileReport {
                                     replace_pattern: None,
                                     alternative: Some("Remove method if not needed, or add justification with reason: policy".into()),
                                 }),
+                                confidence_score: None,
+                                confidence_factors: None,
+                                coverage_info: None,
                             });
                         }
                     }
@@ -1310,6 +1356,9 @@ impl TsAggregate {
                         replace_pattern: None,
                         alternative: Some("Add justification to flow spec with reason: variation".into()),
                     }),
+                    confidence_score: None,
+                    confidence_factors: None,
+                    coverage_info: None,
                 });
             }
         }
@@ -1359,6 +1408,9 @@ impl TsAggregate {
                             replace_pattern: Some(format!("{}(", last_fn)),
                             alternative: Some("Add justification to flow spec with reason: isolation".into()),
                         }),
+                        confidence_score: None,
+                        confidence_factors: None,
+                        coverage_info: None,
                     });
                 }
             }
@@ -1612,6 +1664,9 @@ fn analyze_ts_file(path: &Path, text: &str, language: &Language) -> TsFileReport
                                             replace_pattern: None,
                                             alternative: Some("Remove function if not needed, or add justification with reason: policy".into()),
                                         }),
+                                        confidence_score: None,
+                                        confidence_factors: None,
+                                        coverage_info: None,
                                     });
                                 }
                             }
@@ -1674,6 +1729,9 @@ fn analyze_ts_file(path: &Path, text: &str, language: &Language) -> TsFileReport
                                                 replace_pattern: None,
                                                 alternative: Some("Remove function if not needed, or add justification with reason: policy".into()),
                                             }),
+                                            confidence_score: None,
+                                            confidence_factors: None,
+                                            coverage_info: None,
                                         });
                                     }
                                 }
@@ -1757,6 +1815,9 @@ impl PyAggregate {
                         replace_pattern: None,
                         alternative: Some("Add justification to flow spec with reason: variation".into()),
                     }),
+                    confidence_score: None,
+                    confidence_factors: None,
+                    coverage_info: None,
                 });
             }
         }
@@ -1806,6 +1867,9 @@ impl PyAggregate {
                             replace_pattern: Some(format!("{}(", last_fn)),
                             alternative: Some("Add justification to flow spec with reason: isolation".into()),
                         }),
+                        confidence_score: None,
+                        confidence_factors: None,
+                        coverage_info: None,
                     });
                 }
             }
@@ -2058,6 +2122,9 @@ fn analyze_py_file(path: &Path, text: &str) -> PyFileReport {
                                         replace_pattern: None,
                                         alternative: Some("Remove function if not needed, or add justification with reason: policy".into()),
                                     }),
+                                    confidence_score: None,
+                                    confidence_factors: None,
+                                    coverage_info: None,
                                 });
                             }
                         }

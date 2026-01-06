@@ -23,6 +23,17 @@ type DetectedEnvironments = {
     codex: boolean;
 };
 
+type DefaultAIEditor = 'auto' | 'cursor' | 'claude-code' | 'codex';
+
+// Binary availability status
+type BinaryStatus = {
+    available: boolean;
+    path: string;
+    mode: 'bundled' | 'PATH' | 'missing';
+    platform: string;
+    installCommand: string;
+};
+
 type SidebarNode =
     | { kind: 'info'; label: string; description?: string }
     | { kind: 'action'; label: string; command: vscode.Command; description?: string }
@@ -33,12 +44,15 @@ type DashboardState = {
     platform: string;
     configPath: string;
     configSource: 'workspace' | 'bundled' | 'custom' | 'missing';
-    cli: { mode: 'bundled' | 'PATH'; path: string };
+    cli: { mode: 'bundled' | 'PATH' | 'missing'; path: string };
     lsp: { mode: 'bundled' | 'PATH'; path: string };
+    binaryAvailable: boolean;
+    binaryInstallCommand: string;
     flowsCount: number | null;
     lastAudit: { when: string; findings: number } | null;
     lastProposal: { when: string } | null;
     detectedEnvs: DetectedEnvironments;
+    defaultAIEditor: DefaultAIEditor;
     skills: {
         writing: { cursor: boolean; claude: boolean; codex: boolean };
         'logic-flow': { cursor: boolean; claude: boolean; codex: boolean };
@@ -420,14 +434,70 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                 await this.refresh();
                 return;
             }
+            case 'copyInstall': {
+                const binaryStatus = getBinaryStatus(this.context);
+                await vscode.env.clipboard.writeText(binaryStatus.installCommand);
+                void vscode.window.showInformationMessage(
+                    'ToneGuard: Install command copied to clipboard.'
+                );
+                return;
+            }
+            case 'setDefaultEditor': {
+                const value = typeof message.value === 'string' ? message.value : 'auto';
+                const config = vscode.workspace.getConfiguration('dwg');
+                await config.update(
+                    'defaultAIEditor',
+                    value,
+                    vscode.ConfigurationTarget.Global
+                );
+                void vscode.window.showInformationMessage(
+                    `ToneGuard: Default AI editor set to ${value}.`
+                );
+                await this.refresh();
+                return;
+            }
             case 'installSkill': {
                 const envRaw = typeof message.env === 'string' ? message.env : '';
                 const kindRaw = typeof message.kind === 'string' ? message.kind : '';
                 const kind = kindRaw === 'logic-flow' ? 'logic-flow' : 'writing';
                 if (envRaw === 'all') {
-                    await installSkill(this.context, 'cursor', this.outputChannel, kind);
-                    await installSkill(this.context, 'claude', this.outputChannel, kind);
-                    await installSkill(this.context, 'codex', this.outputChannel, kind);
+                    // Install all with progress indicator
+                    await vscode.window.withProgress(
+                        {
+                            location: vscode.ProgressLocation.Notification,
+                            title: `ToneGuard: Installing ${kind === 'logic-flow' ? 'Logic Flow' : 'Writing'} skills`,
+                            cancellable: false,
+                        },
+                        async (progress) => {
+                            const envs: AIEnvironment[] = ['cursor', 'claude', 'codex'];
+                            const results: { env: string; success: boolean }[] = [];
+                            
+                            for (let i = 0; i < envs.length; i++) {
+                                const env = envs[i];
+                                const envName = getEnvDisplayName(env);
+                                progress.report({
+                                    increment: (100 / envs.length),
+                                    message: `${envName}...`
+                                });
+                                
+                                const success = await installSkill(this.context, env, this.outputChannel, kind);
+                                results.push({ env: envName, success });
+                            }
+                            
+                            // Show summary
+                            const successCount = results.filter(r => r.success).length;
+                            if (successCount === envs.length) {
+                                void vscode.window.showInformationMessage(
+                                    `ToneGuard: All ${kind} skills installed successfully!`
+                                );
+                            } else {
+                                const failed = results.filter(r => !r.success).map(r => r.env).join(', ');
+                                void vscode.window.showWarningMessage(
+                                    `ToneGuard: Installed ${successCount}/${envs.length} skills. Failed: ${failed}`
+                                );
+                            }
+                        }
+                    );
                 } else if (envRaw === 'cursor' || envRaw === 'claude' || envRaw === 'codex') {
                     await installSkill(
                         this.context,
@@ -575,6 +645,7 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
         }
 
         const detectedEnvs = detectAIEnvironments();
+        const binaryStatus = getBinaryStatus(this.context);
         const profileOptions =
             absConfigPath && fs.existsSync(absConfigPath)
                 ? extractProfilesFromConfig(absConfigPath)
@@ -583,6 +654,7 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
         const config = vscode.workspace.getConfiguration('dwg');
         const strict = config.get<boolean>('strict', false);
         const noRepoChecks = config.get<boolean>('noRepoChecks', false);
+        const defaultAIEditor = config.get<DefaultAIEditor>('defaultAIEditor', 'auto');
 
         const configEditable =
             configExists && workspaceRoot && absConfigPath
@@ -606,11 +678,10 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
             configPath: configShown,
             configSource,
             cli: {
-                mode:
-                    bundledCli && runtime.cliCommand === bundledCli
-                        ? 'bundled'
-                        : 'PATH',
-                path: relOrBasename(workspaceRoot ?? '', runtime.cliCommand),
+                mode: binaryStatus.mode,
+                path: binaryStatus.available 
+                    ? relOrBasename(workspaceRoot ?? '', binaryStatus.path) 
+                    : `Not available for ${platform}`,
             },
             lsp: {
                 mode:
@@ -619,10 +690,13 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                         : 'PATH',
                 path: relOrBasename(workspaceRoot ?? '', this.serverCommand),
             },
+            binaryAvailable: binaryStatus.available,
+            binaryInstallCommand: binaryStatus.installCommand,
             flowsCount,
             lastAudit,
             lastProposal,
             detectedEnvs,
+            defaultAIEditor,
             skills: {
                 writing: {
                     cursor: isSkillInstalled('cursor', 'writing'),
@@ -888,50 +962,90 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
             font-size: 11px;
             font-style: italic;
         }
+
+        /* Tab navigation */
+        .tabs {
+            display: flex;
+            gap: 0;
+            border-bottom: 1px solid var(--tg-border);
+            margin-bottom: 12px;
+            overflow-x: auto;
+        }
+
+        .tab {
+            padding: 8px 14px;
+            font-size: 12px;
+            background: transparent;
+            border: none;
+            border-bottom: 2px solid transparent;
+            color: var(--tg-muted);
+            cursor: pointer;
+            white-space: nowrap;
+            transition: color 0.15s, border-color 0.15s;
+        }
+
+        .tab:hover {
+            color: var(--tg-text);
+        }
+
+        .tab.active {
+            color: var(--tg-accent);
+            border-bottom-color: var(--tg-accent);
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .alert {
+            padding: 10px 12px;
+            border-radius: 8px;
+            font-size: 12px;
+            margin-bottom: 10px;
+        }
+
+        .alert.warn {
+            background: rgba(255, 180, 0, 0.1);
+            border: 1px solid var(--tg-warn);
+            color: var(--tg-warn);
+        }
+
+        .alert.info {
+            background: rgba(0, 150, 255, 0.1);
+            border: 1px solid var(--tg-accent);
+            color: var(--tg-accent);
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <div>
-            <div class="section-title">Run</div>
-            <div class="card actions">
-                <button data-action="runRecommended">Run Recommended</button>
-                <div class="grid-2">
-                    <button class="secondary" data-action="runAudit">Flow Audit</button>
-                    <button class="secondary" data-action="runProposal">Flow Proposal</button>
-                </div>
-                <button class="ghost" data-action="newFlow">New Flow Spec</button>
+        <!-- Quick Actions - Always visible -->
+        <div class="card actions">
+            <button data-action="runRecommended">▶ Run ToneGuard</button>
+            <div class="grid-2">
+                <button class="secondary" data-action="runAudit">Flow Audit</button>
+                <button class="secondary" data-action="runProposal">Proposal</button>
             </div>
         </div>
 
-        <div>
-            <div class="section-title">Status</div>
-            <div class="card">
-                <div class="card-row">
-                    <span class="label">Platform</span>
-                    <span class="value" id="platform"></span>
-                </div>
-                <div class="card-row">
-                    <span class="label">Config</span>
-                    <span class="value" id="configPath"></span>
-                </div>
-                <div class="card-row">
-                    <span class="label">Config source</span>
-                    <span class="badge" id="configSource"></span>
-                </div>
-                <div class="card-row">
-                    <span class="label">CLI</span>
-                    <span class="value" id="cliPath"></span>
-                </div>
-                <div class="card-row">
-                    <span class="label">LSP</span>
-                    <span class="value" id="lspPath"></span>
-                </div>
-                <div class="divider"></div>
-                <div class="card-row">
-                    <span class="label">Flows</span>
-                    <span class="value" id="flowsCount"></span>
-                </div>
+        <!-- Tab Navigation -->
+        <div class="tabs">
+            <button class="tab active" data-tab="findings">Findings</button>
+            <button class="tab" data-tab="config">Config</button>
+            <button class="tab" data-tab="skills">Skills</button>
+            <button class="tab" data-tab="status">Status</button>
+        </div>
+
+        <!-- Tab: Findings -->
+        <div id="tab-findings" class="tab-content active">
+            <div id="binaryAlert" class="alert warn" style="display: none;">
+                CLI not available. <a href="#" data-action="copyInstall">Copy install command</a>
+            </div>
+            <div id="findingsSummary" class="card">
                 <div class="card-row">
                     <span class="label">Last audit</span>
                     <span class="value" id="lastAudit"></span>
@@ -941,125 +1055,184 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                     <span class="value" id="lastProposal"></span>
                 </div>
             </div>
+            <button class="ghost" data-action="newFlow">+ New Flow Spec</button>
         </div>
 
-        <div>
-            <div class="section-title">AI Skills</div>
-            <div class="card">
-                <div class="card-row">
-                    <strong class="value">Writing Style</strong>
-                    <button class="secondary" data-action="installSkill" data-kind="writing" data-env="all">Install All</button>
+        <!-- Tab: Config -->
+        <div id="tab-config" class="tab-content">
+            <div>
+                <div class="section-title">Categories</div>
+                <div class="card">
+                    <div id="categoryToggles" class="toggle-grid"></div>
                 </div>
-                <div class="card-row" data-skill="writing" data-env="cursor">
-                    <span class="label">Cursor</span>
+            </div>
+            <div>
+                <div class="section-title">Ignore Patterns</div>
+                <div class="card">
+                    <div id="ignoreGlobsList" class="tag-list"></div>
                     <div class="input-row">
-                        <span class="badge" data-skill-badge>Not installed</span>
-                        <button data-action="installSkill" data-kind="writing" data-env="cursor">Install</button>
-                    </div>
-                </div>
-                <div class="card-row" data-skill="writing" data-env="claude">
-                    <span class="label">Claude Code</span>
-                    <div class="input-row">
-                        <span class="badge" data-skill-badge>Not installed</span>
-                        <button data-action="installSkill" data-kind="writing" data-env="claude">Install</button>
-                    </div>
-                </div>
-                <div class="card-row" data-skill="writing" data-env="codex">
-                    <span class="label">Codex</span>
-                    <div class="input-row">
-                        <span class="badge" data-skill-badge>Not installed</span>
-                        <button data-action="installSkill" data-kind="writing" data-env="codex">Install</button>
-                    </div>
-                </div>
-                <div class="divider"></div>
-                <div class="card-row">
-                    <strong class="value">Logic Flow Guardrails</strong>
-                    <button class="secondary" data-action="installSkill" data-kind="logic-flow" data-env="all">Install All</button>
-                </div>
-                <div class="card-row" data-skill="logic-flow" data-env="cursor">
-                    <span class="label">Cursor</span>
-                    <div class="input-row">
-                        <span class="badge" data-skill-badge>Not installed</span>
-                        <button data-action="installSkill" data-kind="logic-flow" data-env="cursor">Install</button>
-                    </div>
-                </div>
-                <div class="card-row" data-skill="logic-flow" data-env="claude">
-                    <span class="label">Claude Code</span>
-                    <div class="input-row">
-                        <span class="badge" data-skill-badge>Not installed</span>
-                        <button data-action="installSkill" data-kind="logic-flow" data-env="claude">Install</button>
-                    </div>
-                </div>
-                <div class="card-row" data-skill="logic-flow" data-env="codex">
-                    <span class="label">Codex</span>
-                    <div class="input-row">
-                        <span class="badge" data-skill-badge>Not installed</span>
-                        <button data-action="installSkill" data-kind="logic-flow" data-env="codex">Install</button>
+                        <input id="ignoreInput" type="text" placeholder="e.g. **/dist/**" />
+                        <button class="secondary" data-action="addIgnore">Add</button>
                     </div>
                 </div>
             </div>
-        </div>
-
-        <div>
-            <div class="section-title">Categories <span class="help" title="Toggle which checks to run">(?)</span></div>
-            <div class="card">
-                <div id="categoryToggles" class="toggle-grid"></div>
-            </div>
-        </div>
-
-        <div>
-            <div class="section-title">Ignore Patterns</div>
-            <div class="card">
-                <div id="ignoreGlobsList" class="tag-list"></div>
-                <div class="input-row">
-                    <input id="ignoreInput" type="text" placeholder="e.g. **/dist/**" />
-                    <button class="secondary" data-action="addIgnore">Add</button>
+            <div>
+                <div class="section-title">File Types</div>
+                <div class="card">
+                    <div id="fileTypeToggles" class="toggle-grid"></div>
                 </div>
             </div>
-        </div>
-
-        <div>
-            <div class="section-title">File Types</div>
-            <div class="card">
-                <div id="fileTypeToggles" class="toggle-grid"></div>
-            </div>
-        </div>
-
-        <div>
-            <div class="section-title">Profiles <span class="help" title="Profiles apply different rules to different file types">(?)</span></div>
-            <div class="card">
-                <div class="card-row">
-                    <span class="label">Active profile</span>
-                    <span class="value" id="currentProfile"></span>
+            <div>
+                <div class="section-title">Profiles</div>
+                <div class="card">
+                    <div class="card-row">
+                        <span class="label">Active</span>
+                        <span class="value" id="currentProfile"></span>
+                    </div>
+                    <div id="profileOptions" class="input-row" style="flex-wrap: wrap;"></div>
+                    <button class="ghost" data-action="clearProfile">Clear Profile</button>
                 </div>
-                <div class="input-row">
-                    <button class="ghost" data-action="clearProfile">Clear</button>
-                </div>
-                <div id="profileOptions" class="input-row" style="flex-wrap: wrap;"></div>
             </div>
-        </div>
-
-        <div>
-            <div class="section-title">Config</div>
+            <div>
+                <div class="section-title">Quick Settings</div>
+                <div class="card">
+                    <label class="toggle">
+                        <input id="strictToggle" type="checkbox" />
+                        Strict mode
+                    </label>
+                    <label class="toggle">
+                        <input id="repoToggle" type="checkbox" />
+                        Skip repo-wide checks
+                    </label>
+                </div>
+            </div>
             <div class="card">
                 <button class="secondary" data-action="openConfig">Open Config File</button>
             </div>
         </div>
 
-        <div>
-            <div class="section-title">Quick Settings</div>
+        <!-- Tab: Skills -->
+        <div id="tab-skills" class="tab-content">
+            <div>
+                <div class="section-title">AI Editor</div>
+                <div class="card">
+                    <div class="card-row">
+                        <span class="label">Default</span>
+                        <select id="defaultAIEditor" class="value">
+                            <option value="auto">Auto-detect</option>
+                            <option value="cursor">Cursor</option>
+                            <option value="claude-code">Claude Code</option>
+                            <option value="codex">Codex</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div>
+                <div class="section-title">Writing Style</div>
+                <div class="card">
+                    <div class="card-row" data-skill="writing" data-env="cursor">
+                        <span class="label">Cursor</span>
+                        <div class="input-row">
+                            <span class="badge" data-skill-badge>—</span>
+                            <button data-action="installSkill" data-kind="writing" data-env="cursor">Install</button>
+                        </div>
+                    </div>
+                    <div class="card-row" data-skill="writing" data-env="claude">
+                        <span class="label">Claude</span>
+                        <div class="input-row">
+                            <span class="badge" data-skill-badge>—</span>
+                            <button data-action="installSkill" data-kind="writing" data-env="claude">Install</button>
+                        </div>
+                    </div>
+                    <div class="card-row" data-skill="writing" data-env="codex">
+                        <span class="label">Codex</span>
+                        <div class="input-row">
+                            <span class="badge" data-skill-badge>—</span>
+                            <button data-action="installSkill" data-kind="writing" data-env="codex">Install</button>
+                        </div>
+                    </div>
+                    <button class="ghost" data-action="installSkill" data-kind="writing" data-env="all">Install All</button>
+                </div>
+            </div>
+            <div>
+                <div class="section-title">Logic Flow Guardrails</div>
+                <div class="card">
+                    <div class="card-row" data-skill="logic-flow" data-env="cursor">
+                        <span class="label">Cursor</span>
+                        <div class="input-row">
+                            <span class="badge" data-skill-badge>—</span>
+                            <button data-action="installSkill" data-kind="logic-flow" data-env="cursor">Install</button>
+                        </div>
+                    </div>
+                    <div class="card-row" data-skill="logic-flow" data-env="claude">
+                        <span class="label">Claude</span>
+                        <div class="input-row">
+                            <span class="badge" data-skill-badge>—</span>
+                            <button data-action="installSkill" data-kind="logic-flow" data-env="claude">Install</button>
+                        </div>
+                    </div>
+                    <div class="card-row" data-skill="logic-flow" data-env="codex">
+                        <span class="label">Codex</span>
+                        <div class="input-row">
+                            <span class="badge" data-skill-badge>—</span>
+                            <button data-action="installSkill" data-kind="logic-flow" data-env="codex">Install</button>
+                        </div>
+                    </div>
+                    <button class="ghost" data-action="installSkill" data-kind="logic-flow" data-env="all">Install All</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: Status -->
+        <div id="tab-status" class="tab-content">
+            <div class="section-title">Environment</div>
             <div class="card">
-                <label class="toggle">
-                    <input id="strictToggle" type="checkbox" />
-                    Strict mode (surface warnings as errors)
-                </label>
-                <label class="toggle">
-                    <input id="repoToggle" type="checkbox" />
-                    Skip repo-wide checks
-                </label>
+                <div class="card-row">
+                    <span class="label">Platform</span>
+                    <span class="value" id="platform"></span>
+                </div>
+                <div class="card-row">
+                    <span class="label">CLI</span>
+                    <span class="value" id="cliPath"></span>
+                </div>
+                <div class="card-row">
+                    <span class="label">LSP</span>
+                    <span class="value" id="lspPath"></span>
+                </div>
+            </div>
+            <div class="section-title">Config</div>
+            <div class="card">
+                <div class="card-row">
+                    <span class="label">Path</span>
+                    <span class="value" id="configPath"></span>
+                </div>
+                <div class="card-row">
+                    <span class="label">Source</span>
+                    <span class="badge" id="configSource"></span>
+                </div>
+                <div class="card-row">
+                    <span class="label">Flows</span>
+                    <span class="value" id="flowsCount"></span>
+                </div>
+            </div>
+            <div class="section-title">Detected AI Environments</div>
+            <div class="card">
+                <div class="card-row">
+                    <span class="label">Cursor</span>
+                    <span class="badge" id="envCursor">—</span>
+                </div>
+                <div class="card-row">
+                    <span class="label">Claude Code</span>
+                    <span class="badge" id="envClaude">—</span>
+                </div>
+                <div class="card-row">
+                    <span class="label">Codex</span>
+                    <span class="badge" id="envCodex">—</span>
+                </div>
             </div>
         </div>
     </div>
+
 
     <script nonce="${nonce}">
         const vscode = acquireVsCodeApi();
@@ -1239,6 +1412,58 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                 render(message.state);
             }
         });
+
+        // Tab switching
+        document.querySelectorAll('.tab').forEach((tab) => {
+            tab.addEventListener('click', () => {
+                const tabName = tab.dataset.tab;
+                if (!tabName) return;
+                
+                // Update active tab button
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                
+                // Update active tab content
+                document.querySelectorAll('.tab-content').forEach(content => {
+                    content.classList.toggle('active', content.id === 'tab-' + tabName);
+                });
+            });
+        });
+
+        // Show binary alert if not available
+        if (!state.binaryAvailable) {
+            const alert = document.getElementById('binaryAlert');
+            if (alert) {
+                alert.style.display = 'block';
+                alert.querySelector('[data-action="copyInstall"]').addEventListener('click', (e) => {
+                    e.preventDefault();
+                    vscode.postMessage({ type: 'copyInstall' });
+                });
+            }
+        }
+
+        // AI Editor selector
+        const editorSelect = document.getElementById('defaultAIEditor');
+        if (editorSelect) {
+            editorSelect.value = state.defaultAIEditor || 'auto';
+            editorSelect.addEventListener('change', () => {
+                vscode.postMessage({ type: 'setDefaultEditor', value: editorSelect.value });
+            });
+        }
+
+        // Detected environments
+        function setBadge(id, detected) {
+            const el = document.getElementById(id);
+            if (el) {
+                el.textContent = detected ? 'Yes' : 'No';
+                el.classList.toggle('ok', detected);
+            }
+        }
+        if (state.detectedEnvs) {
+            setBadge('envCursor', state.detectedEnvs.cursor);
+            setBadge('envClaude', state.detectedEnvs.claude);
+            setBadge('envCodex', state.detectedEnvs.codex);
+        }
 
         document.addEventListener('click', (event) => {
             const target = event.target;
@@ -1965,7 +2190,38 @@ function generateFixPrompt(findings: any[]): string {
 }
 
 /**
+ * Gets the default AI editor from settings, or auto-detects.
+ */
+function getDefaultAIEditor(): DefaultAIEditor {
+    const config = vscode.workspace.getConfiguration('dwg');
+    return config.get<DefaultAIEditor>('defaultAIEditor', 'auto');
+}
+
+/**
+ * Resolves which AI editor to use based on settings and availability.
+ */
+function resolveAIEditor(envs: DetectedEnvironments): AIEnvironment | null {
+    const defaultEditor = getDefaultAIEditor();
+    
+    if (defaultEditor !== 'auto') {
+        // User has a preference - check if it's available
+        if (defaultEditor === 'cursor' && envs.cursor) return 'cursor';
+        if (defaultEditor === 'claude-code' && envs.claude) return 'claude';
+        if (defaultEditor === 'codex' && envs.codex) return 'codex';
+        // Fall through to auto if preferred editor not available
+    }
+    
+    // Auto-detect: prioritize based on likely context
+    if (envs.cursor) return 'cursor';
+    if (envs.claude) return 'claude';
+    if (envs.codex) return 'codex';
+    return null;
+}
+
+/**
  * Fix findings using an AI agent (Cursor Composer, Claude, or Codex).
+ * For Cursor: Attempts to use native chat API, falls back to clipboard.
+ * For Claude/Codex: Copies to clipboard with instructions.
  */
 async function fixWithAI(
     context: vscode.ExtensionContext,
@@ -1975,24 +2231,60 @@ async function fixWithAI(
 ): Promise<void> {
     const prompt = generateFixPrompt(findings);
     
-    // Copy to clipboard
+    outputChannel.appendLine(`ToneGuard: Preparing ${findings.length} fix instructions for ${env}`);
+    
+    if (env === 'cursor') {
+        // Try multiple Cursor-specific commands to insert the prompt
+        const cursorCommands = [
+            'cursor.chat.newWithPrompt',      // New chat with prompt (if available)
+            'cursor.composer.newWithPrompt',  // New composer with prompt
+            'aichat.newchatwithprompt',       // Alternative chat command
+            'workbench.action.chat.open',     // Generic VS Code chat
+        ];
+        
+        let inserted = false;
+        for (const cmd of cursorCommands) {
+            try {
+                // Try commands that accept a prompt argument
+                await vscode.commands.executeCommand(cmd, { prompt, query: prompt, text: prompt });
+                inserted = true;
+                void vscode.window.showInformationMessage(
+                    `ToneGuard: ${findings.length} fixes sent to Cursor chat.`
+                );
+                break;
+            } catch {
+                // Command doesn't exist or doesn't accept this format, try next
+            }
+        }
+        
+        if (!inserted) {
+            // Fallback: Copy to clipboard and open composer
+            await vscode.env.clipboard.writeText(prompt);
+            try {
+                await vscode.commands.executeCommand('cursor.composer.new');
+                void vscode.window.showInformationMessage(
+                    `ToneGuard: ${findings.length} fix instructions copied. Paste in Composer (Cmd+V) to apply.`
+                );
+            } catch {
+                // Can't even open composer, just inform user
+                void vscode.window.showInformationMessage(
+                    `ToneGuard: ${findings.length} fix instructions copied. Open Composer (Cmd+I) and paste.`
+                );
+            }
+        }
+        return;
+    }
+    
+    // For Claude/Codex: Copy to clipboard
     await vscode.env.clipboard.writeText(prompt);
     outputChannel.appendLine(`ToneGuard: Copied ${findings.length} fix instructions to clipboard`);
     
-    if (env === 'cursor') {
-        // Try to open Cursor Composer
-        try {
-            await vscode.commands.executeCommand('cursor.composer.new');
+    if (env === 'claude') {
         void vscode.window.showInformationMessage(
-                `ToneGuard: ${findings.length} fix instructions copied. Paste in Composer to apply.`
-            );
-        } catch {
-            void vscode.window.showInformationMessage(
-                `ToneGuard: ${findings.length} fix instructions copied to clipboard. Open Composer (Cmd+I) and paste.`
-            );
-        }
+            `ToneGuard: ${findings.length} fix instructions copied. Paste in Claude Code to apply.`
+        );
     } else {
-        // For Claude/Codex, just inform user
+        // For Codex
         void vscode.window.showInformationMessage(
             `ToneGuard: ${findings.length} fix instructions copied. Paste in ${getEnvDisplayName(env)} to apply.`
         );
@@ -2044,6 +2336,100 @@ function getBundledCliPath(context: vscode.ExtensionContext): string | undefined
 }
 
 /**
+ * Checks if a command exists in PATH.
+ */
+function commandExistsInPath(command: string): boolean {
+    try {
+        const { execSync } = require('child_process');
+        const which = os.platform() === 'win32' ? 'where' : 'which';
+        execSync(`${which} ${command}`, { stdio: 'ignore' });
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Gets the binary availability status with helpful installation instructions.
+ */
+function getBinaryStatus(context: vscode.ExtensionContext): BinaryStatus {
+    const platform = getPlatformDir();
+    const bundledPath = getBundledCliPath(context);
+    
+    if (bundledPath) {
+        return {
+            available: true,
+            path: bundledPath,
+            mode: 'bundled',
+            platform,
+            installCommand: '',
+        };
+    }
+    
+    // Check if dwg is in PATH
+    if (commandExistsInPath('dwg')) {
+        return {
+            available: true,
+            path: 'dwg',
+            mode: 'PATH',
+            platform,
+            installCommand: '',
+        };
+    }
+    
+    // Binary not available - provide install instructions based on platform
+    let installCommand: string;
+    if (platform.startsWith('darwin')) {
+        installCommand = 'brew install toneguard  # or: cargo install --git https://github.com/editnori/toneguard dwg-cli';
+    } else if (platform.startsWith('win32')) {
+        installCommand = 'cargo install --git https://github.com/editnori/toneguard dwg-cli';
+    } else {
+        installCommand = 'cargo install --git https://github.com/editnori/toneguard dwg-cli';
+    }
+    
+    return {
+        available: false,
+        path: '',
+        mode: 'missing',
+        platform,
+        installCommand,
+    };
+}
+
+/**
+ * Shows an error message when binaries are not available for the platform.
+ */
+async function showBinaryMissingError(status: BinaryStatus): Promise<void> {
+    const platformNames: Record<string, string> = {
+        'darwin-arm64': 'macOS (Apple Silicon)',
+        'darwin-x64': 'macOS (Intel)',
+        'win32-x64': 'Windows',
+        'linux-x64': 'Linux (x64)',
+        'linux-arm64': 'Linux (ARM64)',
+    };
+    
+    const platformName = platformNames[status.platform] || status.platform;
+    
+    const choice = await vscode.window.showErrorMessage(
+        `ToneGuard: Binaries not available for ${platformName}. Install manually to use flow analysis features.`,
+        'Copy Install Command',
+        'Open GitHub',
+        'Dismiss'
+    );
+    
+    if (choice === 'Copy Install Command') {
+        await vscode.env.clipboard.writeText(status.installCommand);
+        void vscode.window.showInformationMessage(
+            'Install command copied to clipboard. Run it in your terminal.'
+        );
+    } else if (choice === 'Open GitHub') {
+        void vscode.env.openExternal(
+            vscode.Uri.parse('https://github.com/editnori/toneguard#installation')
+        );
+    }
+}
+
+/**
  * Resolves the CLI command to use.
  * Priority:
  * 1. User-specified command in settings
@@ -2070,22 +2456,36 @@ function getCliCommand(context: vscode.ExtensionContext, userCommand: string): s
 
 /**
  * Detects all AI environments: Cursor IDE, Claude Code, and Codex.
- * - Cursor: Detected by checking if running in Cursor IDE
- * - Claude Code: Detected by .claude directory in workspace
- * - Codex: Detected by .codex directory in workspace
+ * Uses multiple detection methods for reliability:
+ * - Cursor: appName, uriScheme, or CURSOR_* env vars
+ * - Claude Code: ~/.claude directory, CLAUDE_* env vars, or workspace .claude
+ * - Codex: ~/.codex directory, CODEX_* env vars, or workspace .codex
  */
 function detectAIEnvironments(): DetectedEnvironments {
-    const isCursor = vscode.env.appName.toLowerCase().includes('cursor');
+    // Cursor detection: check appName, uriScheme, and environment
+    const isCursor = 
+        vscode.env.appName.toLowerCase().includes('cursor') ||
+        vscode.env.uriScheme === 'cursor' ||
+        !!process.env.CURSOR_CHANNEL ||
+        !!process.env.CURSOR_TRACE;
     
+    const homeDir = os.homedir();
     const workspaceFolders = vscode.workspace.workspaceFolders;
-    let hasClaude = false;
-    let hasCodex = false;
+    const workspaceRoot = workspaceFolders?.[0]?.uri.fsPath;
     
-    if (workspaceFolders && workspaceFolders.length > 0) {
-        const workspaceRoot = workspaceFolders[0].uri.fsPath;
-        hasClaude = fs.existsSync(path.join(workspaceRoot, '.claude'));
-        hasCodex = fs.existsSync(path.join(workspaceRoot, '.codex'));
-    }
+    // Claude Code detection: global config, env vars, or workspace marker
+    const hasClaude = 
+        fs.existsSync(path.join(homeDir, '.claude')) ||
+        !!process.env.CLAUDE_API_KEY ||
+        !!process.env.ANTHROPIC_API_KEY ||
+        (workspaceRoot ? fs.existsSync(path.join(workspaceRoot, '.claude')) : false);
+    
+    // Codex detection: global config, env vars, or workspace marker
+    const hasCodex = 
+        fs.existsSync(path.join(homeDir, '.codex')) ||
+        !!process.env.CODEX_HOME ||
+        !!process.env.OPENAI_API_KEY ||
+        (workspaceRoot ? fs.existsSync(path.join(workspaceRoot, '.codex')) : false);
 
     return {
         cursor: isCursor,
@@ -2541,6 +2941,16 @@ export function activate(context: vscode.ExtensionContext): void {
                 return;
             }
 
+            // Pre-flight check: ensure binary is available
+            const binaryStatus = getBinaryStatus(context);
+            if (!binaryStatus.available) {
+                outputChannel.show(true);
+                outputChannel.appendLine(`ToneGuard: Binary not available for platform: ${binaryStatus.platform}`);
+                outputChannel.appendLine(`ToneGuard: Install command: ${binaryStatus.installCommand}`);
+                await showBinaryMissingError(binaryStatus);
+                return;
+            }
+
             const auditPath = path.join(workspaceRoot, 'reports', 'flow-audit.json');
             const proposalPath = path.join(
                 workspaceRoot,
@@ -2709,6 +3119,14 @@ export function activate(context: vscode.ExtensionContext): void {
                 void vscode.window.showErrorMessage('ToneGuard: No workspace open.');
                 return;
             }
+            
+            // Pre-flight check
+            const binaryStatus = getBinaryStatus(context);
+            if (!binaryStatus.available) {
+                await showBinaryMissingError(binaryStatus);
+                return;
+            }
+            
             const workspaceRoot = workspaceFolders[0].uri.fsPath;
             const reportPath = path.join(workspaceRoot, 'reports', 'flow-audit.json');
             const flowsDir = path.join(workspaceRoot, 'flows');
@@ -2770,6 +3188,14 @@ export function activate(context: vscode.ExtensionContext): void {
                 void vscode.window.showErrorMessage('ToneGuard: No workspace open.');
                 return;
             }
+            
+            // Pre-flight check
+            const binaryStatus = getBinaryStatus(context);
+            if (!binaryStatus.available) {
+                await showBinaryMissingError(binaryStatus);
+                return;
+            }
+            
             const workspaceRoot = workspaceFolders[0].uri.fsPath;
             const reportPath = path.join(workspaceRoot, 'reports', 'flow-proposal.md');
             const flowsDir = path.join(workspaceRoot, 'flows');
@@ -2836,6 +3262,14 @@ export function activate(context: vscode.ExtensionContext): void {
                 void vscode.window.showErrorMessage('ToneGuard: No workspace open.');
                 return;
             }
+            
+            // Pre-flight check
+            const binaryStatus = getBinaryStatus(context);
+            if (!binaryStatus.available) {
+                await showBinaryMissingError(binaryStatus);
+                return;
+            }
+            
             const workspaceRoot = workspaceFolders[0].uri.fsPath;
 
             const name = await vscode.window.showInputBox({

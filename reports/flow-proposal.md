@@ -23,58 +23,6 @@ A concrete review artifact: flow spec checks + static entropy findings.
 
 ### PassThrough (4)
 
-#### [Info] `core/src/lib.rs:4011`
-
-**What**: Pass-through wrapper chain length 2: sentence_has_specifics -> is_match
-
-**Fix options**:
-1. **Inline**: Inline `sentence_has_specifics` by replacing calls with direct calls to `is_match`
-2. **Justify**: Add justification to flow spec with reason: isolation
-
-**For AI agents**:
-
-```json
-{
-  "action": "inline",
-  "alternative": "Add justification to flow spec with reason: isolation",
-  "file": "core/src/lib.rs",
-  "find": "sentence_has_specifics\\\\s*\\\\(",
-  "line": 4011,
-  "replace": "is_match("
-}
-```
-
-**Evidence**:
-- Forward-only functions: sentence_has_specifics -> is_match
-
----
-
-#### [Info] `core/src/lib.rs:4019`
-
-**What**: Pass-through wrapper chain length 2: percent_claim_is_contextual -> is_match
-
-**Fix options**:
-1. **Inline**: Inline `percent_claim_is_contextual` by replacing calls with direct calls to `is_match`
-2. **Justify**: Add justification to flow spec with reason: isolation
-
-**For AI agents**:
-
-```json
-{
-  "action": "inline",
-  "alternative": "Add justification to flow spec with reason: isolation",
-  "file": "core/src/lib.rs",
-  "find": "percent_claim_is_contextual\\\\s*\\\\(",
-  "line": 4019,
-  "replace": "is_match("
-}
-```
-
-**Evidence**:
-- Forward-only functions: percent_claim_is_contextual -> is_match
-
----
-
 #### [Info] `core/src/lib.rs:3791`
 
 **What**: Pass-through wrapper chain length 2: is_emoji_hint -> contains
@@ -124,6 +72,58 @@ A concrete review artifact: flow spec checks + static entropy findings.
 
 **Evidence**:
 - Forward-only functions: sentence_has_citation -> is_match
+
+---
+
+#### [Info] `core/src/lib.rs:4011`
+
+**What**: Pass-through wrapper chain length 2: sentence_has_specifics -> is_match
+
+**Fix options**:
+1. **Inline**: Inline `sentence_has_specifics` by replacing calls with direct calls to `is_match`
+2. **Justify**: Add justification to flow spec with reason: isolation
+
+**For AI agents**:
+
+```json
+{
+  "action": "inline",
+  "alternative": "Add justification to flow spec with reason: isolation",
+  "file": "core/src/lib.rs",
+  "find": "sentence_has_specifics\\\\s*\\\\(",
+  "line": 4011,
+  "replace": "is_match("
+}
+```
+
+**Evidence**:
+- Forward-only functions: sentence_has_specifics -> is_match
+
+---
+
+#### [Info] `core/src/lib.rs:4019`
+
+**What**: Pass-through wrapper chain length 2: percent_claim_is_contextual -> is_match
+
+**Fix options**:
+1. **Inline**: Inline `percent_claim_is_contextual` by replacing calls with direct calls to `is_match`
+2. **Justify**: Add justification to flow spec with reason: isolation
+
+**For AI agents**:
+
+```json
+{
+  "action": "inline",
+  "alternative": "Add justification to flow spec with reason: isolation",
+  "file": "core/src/lib.rs",
+  "find": "percent_claim_is_contextual\\\\s*\\\\(",
+  "line": 4019,
+  "replace": "is_match("
+}
+```
+
+**Evidence**:
+- Forward-only functions: percent_claim_is_contextual -> is_match
 
 ---
 

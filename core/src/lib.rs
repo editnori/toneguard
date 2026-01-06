@@ -14,7 +14,9 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 pub mod arch;
+pub mod coverage;
 pub mod flow;
+pub mod symbols;
 
 /// Heading capitalisation policy.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

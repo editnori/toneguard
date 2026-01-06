@@ -2,7 +2,7 @@
   "name": "toneguard",
   "displayName": "ToneGuard",
   "description": "Zero-setup AI slop detection for Markdown. Highlights generic, AI-style writing patterns instantly.",
-  "version": "0.1.53",
+  "version": "0.1.54",
   "publisher": "editnori",
   "icon": "icon.png",
   "engines": {
@@ -258,6 +258,18 @@
           "type": "boolean",
           "default": false,
           "markdownDescription": "Skip repo-wide hygiene (duplicate lockfiles, stray markdown, variant copies).\nDefaults to **false** so all repo slop checks run."
+        },
+        "dwg.defaultAIEditor": {
+          "type": "string",
+          "enum": ["auto", "cursor", "claude-code", "codex"],
+          "enumDescriptions": [
+            "Auto-detect: Use Cursor if running in Cursor, otherwise check Claude/Codex",
+            "Cursor: Always use Cursor Composer for fixes",
+            "Claude Code: Always use Claude Code for fixes",
+            "Codex: Always use Codex for fixes"
+          ],
+          "default": "auto",
+          "markdownDescription": "Preferred AI editor for applying fixes. Set to a specific editor or 'auto' to detect based on your environment."
         },
         "dwg.enableRepoCategories": {
           "type": "array",
