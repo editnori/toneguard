@@ -14,7 +14,9 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 pub mod arch;
+pub mod cfg;
 pub mod coverage;
+pub mod dfg;
 pub mod flow;
 pub mod symbols;
 

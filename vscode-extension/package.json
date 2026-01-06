@@ -2,7 +2,7 @@
   "name": "toneguard",
   "displayName": "ToneGuard",
   "description": "Zero-setup AI slop detection for Markdown. Highlights generic, AI-style writing patterns instantly.",
-  "version": "0.1.55",
+  "version": "0.1.56",
   "publisher": "editnori",
   "icon": "icon.png",
   "engines": {
@@ -120,6 +120,11 @@
       {
         "command": "dwg.installSkillCodex",
         "title": "ToneGuard: Install Skill for Codex",
+        "category": "ToneGuard"
+      },
+      {
+        "command": "dwg.openFlowMap",
+        "title": "ToneGuard: Open Flow Map",
         "category": "ToneGuard"
       }
     ],

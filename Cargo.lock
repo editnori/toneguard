@@ -247,7 +247,7 @@ dependencies = [
 
 [[package]]
 name = "dwg-cli"
-version = "0.1.55"
+version = "0.1.56"
 dependencies = [
  "anyhow",
  "clap",
@@ -259,12 +259,17 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "syn",
+ "tree-sitter",
+ "tree-sitter-javascript",
+ "tree-sitter-python",
+ "tree-sitter-typescript",
  "walkdir",
 ]
 
 [[package]]
 name = "dwg-core"
-version = "0.1.55"
+version = "0.1.56"
 dependencies = [
  "aho-corasick 0.7.20",
  "anyhow",
@@ -288,7 +293,7 @@ dependencies = [
 
 [[package]]
 name = "dwg-lsp"
-version = "0.1.55"
+version = "0.1.56"
 dependencies = [
  "anyhow",
  "dashmap 6.1.0",

@@ -2690,6 +2690,551 @@ function getNonce(): string {
     return text;
 }
 
+// Flow Map Panel for visualizing control flow graphs
+class FlowMapPanel {
+    public static currentPanel: FlowMapPanel | undefined;
+    public static readonly viewType = 'toneguard.flowMap';
+
+    private readonly panel: vscode.WebviewPanel;
+    private readonly extensionUri: vscode.Uri;
+    private disposables: vscode.Disposable[] = [];
+    private cliPath: string;
+    private configPath: string;
+    private outputChannel: vscode.OutputChannel;
+
+    public static createOrShow(
+        extensionUri: vscode.Uri,
+        cliPath: string,
+        configPath: string,
+        outputChannel: vscode.OutputChannel,
+        filePath?: string
+    ): FlowMapPanel {
+        const column = vscode.window.activeTextEditor
+            ? vscode.window.activeTextEditor.viewColumn
+            : undefined;
+
+        // If we already have a panel, show it
+        if (FlowMapPanel.currentPanel) {
+            FlowMapPanel.currentPanel.panel.reveal(column);
+            if (filePath) {
+                FlowMapPanel.currentPanel.loadFile(filePath);
+            }
+            return FlowMapPanel.currentPanel;
+        }
+
+        // Otherwise, create a new panel
+        const panel = vscode.window.createWebviewPanel(
+            FlowMapPanel.viewType,
+            'ToneGuard Flow Map',
+            column || vscode.ViewColumn.One,
+            {
+                enableScripts: true,
+                retainContextWhenHidden: true,
+            }
+        );
+
+        FlowMapPanel.currentPanel = new FlowMapPanel(
+            panel,
+            extensionUri,
+            cliPath,
+            configPath,
+            outputChannel
+        );
+
+        if (filePath) {
+            FlowMapPanel.currentPanel.loadFile(filePath);
+        }
+
+        return FlowMapPanel.currentPanel;
+    }
+
+    private constructor(
+        panel: vscode.WebviewPanel,
+        extensionUri: vscode.Uri,
+        cliPath: string,
+        configPath: string,
+        outputChannel: vscode.OutputChannel
+    ) {
+        this.panel = panel;
+        this.extensionUri = extensionUri;
+        this.cliPath = cliPath;
+        this.configPath = configPath;
+        this.outputChannel = outputChannel;
+
+        this.update();
+
+        this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
+
+        this.panel.webview.onDidReceiveMessage(
+            async (message: any) => {
+                switch (message.command) {
+                    case 'selectFile':
+                        const files = await vscode.window.showOpenDialog({
+                            canSelectFiles: true,
+                            canSelectFolders: false,
+                            canSelectMany: false,
+                            filters: {
+                                'Source Files': ['rs', 'ts', 'tsx', 'js', 'jsx', 'py'],
+                            },
+                        });
+                        if (files && files[0]) {
+                            this.loadFile(files[0].fsPath);
+                        }
+                        break;
+
+                    case 'loadFunction':
+                        this.loadFunction(message.file, message.functionName);
+                        break;
+
+                    case 'openFile':
+                        const uri = vscode.Uri.file(message.file);
+                        const doc = await vscode.workspace.openTextDocument(uri);
+                        await vscode.window.showTextDocument(doc, {
+                            selection: message.line
+                                ? new vscode.Range(message.line - 1, 0, message.line - 1, 0)
+                                : undefined,
+                        });
+                        break;
+                }
+            },
+            null,
+            this.disposables
+        );
+    }
+
+    public loadFile(filePath: string): void {
+        this.runCliGraph(filePath).then((result) => {
+            this.panel.webview.postMessage({
+                type: 'graphData',
+                data: result,
+                filePath,
+            });
+        }).catch((err) => {
+            this.panel.webview.postMessage({
+                type: 'error',
+                message: err.message,
+            });
+        });
+    }
+
+    public loadFunction(filePath: string, functionName: string): void {
+        this.runCliGraph(filePath, functionName).then((result) => {
+            this.panel.webview.postMessage({
+                type: 'graphData',
+                data: result,
+                filePath,
+                functionName,
+            });
+        }).catch((err) => {
+            this.panel.webview.postMessage({
+                type: 'error',
+                message: err.message,
+            });
+        });
+    }
+
+    private async runCliGraph(
+        filePath: string,
+        functionName?: string
+    ): Promise<any> {
+        return new Promise((resolve, reject) => {
+            const args = ['flow', 'graph', '--file', filePath, '--with-logic'];
+            if (functionName) {
+                args.push('--fn', functionName);
+            }
+
+            this.outputChannel.appendLine(`ToneGuard: Running ${this.cliPath} ${args.join(' ')}`);
+
+            execFile(this.cliPath, args, { maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
+                if (error) {
+                    this.outputChannel.appendLine(`ToneGuard: Flow graph error: ${stderr || error.message}`);
+                    reject(new Error(stderr || error.message));
+                    return;
+                }
+
+                try {
+                    const data = JSON.parse(stdout);
+                    resolve(data);
+                } catch (e) {
+                    reject(new Error('Failed to parse CFG output'));
+                }
+            });
+        });
+    }
+
+    private update(): void {
+        const webview = this.panel.webview;
+        this.panel.title = 'ToneGuard Flow Map';
+        this.panel.webview.html = this.getHtmlForWebview(webview);
+    }
+
+    private getHtmlForWebview(webview: vscode.Webview): string {
+        const nonce = getNonce();
+
+        return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+    <title>ToneGuard Flow Map</title>
+    <style>
+        :root {
+            --bg: var(--vscode-editor-background);
+            --fg: var(--vscode-editor-foreground);
+            --border: var(--vscode-panel-border);
+            --accent: var(--vscode-button-background);
+            --btn-fg: var(--vscode-button-foreground);
+            --input-bg: var(--vscode-input-background);
+            --input-border: var(--vscode-input-border);
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            padding: 16px;
+            font-family: var(--vscode-font-family);
+            background: var(--bg);
+            color: var(--fg);
+        }
+        h1 { margin: 0 0 16px 0; font-size: 1.5em; }
+        .toolbar {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 16px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        button {
+            background: var(--accent);
+            color: var(--btn-fg);
+            border: none;
+            padding: 8px 16px;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+        button:hover { opacity: 0.9; }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        select {
+            background: var(--input-bg);
+            color: var(--fg);
+            border: 1px solid var(--input-border);
+            padding: 8px;
+            border-radius: 4px;
+            min-width: 200px;
+        }
+        .file-path {
+            font-size: 12px;
+            color: var(--vscode-descriptionForeground);
+            margin-left: auto;
+        }
+        .container {
+            display: grid;
+            grid-template-columns: 280px 1fr;
+            gap: 16px;
+            height: calc(100vh - 140px);
+        }
+        .sidebar {
+            background: var(--vscode-sideBar-background);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            overflow: auto;
+            padding: 12px;
+        }
+        .sidebar h3 {
+            margin: 0 0 12px 0;
+            font-size: 13px;
+            text-transform: uppercase;
+            color: var(--vscode-descriptionForeground);
+        }
+        .function-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        .function-list li {
+            padding: 8px;
+            cursor: pointer;
+            border-radius: 4px;
+            margin-bottom: 4px;
+            font-size: 13px;
+        }
+        .function-list li:hover {
+            background: var(--vscode-list-hoverBackground);
+        }
+        .function-list li.selected {
+            background: var(--vscode-list-activeSelectionBackground);
+            color: var(--vscode-list-activeSelectionForeground);
+        }
+        .function-stats {
+            font-size: 11px;
+            color: var(--vscode-descriptionForeground);
+        }
+        .main-panel {
+            background: var(--vscode-sideBar-background);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            overflow: auto;
+            display: flex;
+            flex-direction: column;
+        }
+        .graph-container {
+            flex: 1;
+            padding: 16px;
+            overflow: auto;
+        }
+        pre.mermaid-code {
+            background: var(--vscode-textBlockQuote-background);
+            padding: 12px;
+            border-radius: 4px;
+            overflow: auto;
+            font-size: 12px;
+            white-space: pre-wrap;
+            margin: 0;
+        }
+        .findings-panel {
+            border-top: 1px solid var(--border);
+            padding: 12px;
+            max-height: 200px;
+            overflow: auto;
+        }
+        .findings-panel h4 {
+            margin: 0 0 8px 0;
+            font-size: 12px;
+            color: var(--vscode-descriptionForeground);
+        }
+        .finding-item {
+            padding: 8px;
+            margin-bottom: 4px;
+            border-radius: 4px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        .finding-item:hover {
+            background: var(--vscode-list-hoverBackground);
+        }
+        .finding-item.warning {
+            border-left: 3px solid var(--vscode-editorWarning-foreground);
+        }
+        .finding-item.error {
+            border-left: 3px solid var(--vscode-editorError-foreground);
+        }
+        .finding-item.info {
+            border-left: 3px solid var(--vscode-editorInfo-foreground);
+        }
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--vscode-descriptionForeground);
+        }
+        .empty-state h2 { margin: 0 0 12px 0; }
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: var(--vscode-descriptionForeground);
+        }
+        .error-msg {
+            background: var(--vscode-inputValidation-errorBackground);
+            border: 1px solid var(--vscode-inputValidation-errorBorder);
+            padding: 12px;
+            border-radius: 4px;
+            margin: 16px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔀 Flow Map</h1>
+    <div class="toolbar">
+        <button id="selectFileBtn">📂 Select File</button>
+        <select id="functionSelect" disabled>
+            <option value="">-- Select a function --</option>
+        </select>
+        <span class="file-path" id="filePath"></span>
+    </div>
+
+    <div class="container">
+        <div class="sidebar">
+            <h3>Functions</h3>
+            <ul class="function-list" id="functionList">
+                <li class="empty-state">Select a file to see functions</li>
+            </ul>
+        </div>
+        <div class="main-panel">
+            <div class="graph-container" id="graphContainer">
+                <div class="empty-state">
+                    <h2>Control Flow Graph Visualizer</h2>
+                    <p>Select a source file (.rs, .ts, .js, .py) to visualize its control flow graph.</p>
+                    <p>Click on a function to see its CFG as a Mermaid diagram.</p>
+                </div>
+            </div>
+            <div class="findings-panel" id="findingsPanel" style="display: none;">
+                <h4>Logic Findings</h4>
+                <div id="findingsList"></div>
+            </div>
+        </div>
+    </div>
+
+    <script nonce="${nonce}">
+        const vscode = acquireVsCodeApi();
+        let currentData = null;
+        let currentFile = '';
+
+        document.getElementById('selectFileBtn').addEventListener('click', () => {
+            vscode.postMessage({ command: 'selectFile' });
+        });
+
+        document.getElementById('functionSelect').addEventListener('change', (e) => {
+            const fn = e.target.value;
+            if (fn && currentFile) {
+                vscode.postMessage({ command: 'loadFunction', file: currentFile, functionName: fn });
+            }
+        });
+
+        window.addEventListener('message', event => {
+            const message = event.data;
+            
+            if (message.type === 'graphData') {
+                currentData = message.data;
+                currentFile = message.filePath || '';
+                document.getElementById('filePath').textContent = currentFile;
+                renderFunctionList(message.data.cfgs || []);
+                
+                // If a single function was loaded, show its graph
+                if (message.functionName && message.data.cfgs?.length > 0) {
+                    const cfg = message.data.cfgs[0];
+                    renderGraph(cfg);
+                    highlightFunction(cfg.name);
+                } else if (message.data.cfgs?.length > 0) {
+                    // Show first function by default
+                    const cfg = message.data.cfgs[0];
+                    renderGraph(cfg);
+                    highlightFunction(cfg.name);
+                }
+                
+                // Show findings if any
+                if (message.data.logic_findings?.length > 0) {
+                    renderFindings(message.data.logic_findings);
+                } else {
+                    document.getElementById('findingsPanel').style.display = 'none';
+                }
+            }
+            
+            if (message.type === 'error') {
+                document.getElementById('graphContainer').innerHTML = 
+                    '<div class="error-msg">' + escapeHtml(message.message) + '</div>';
+            }
+        });
+
+        function renderFunctionList(cfgs) {
+            const list = document.getElementById('functionList');
+            const select = document.getElementById('functionSelect');
+            
+            if (!cfgs || cfgs.length === 0) {
+                list.innerHTML = '<li class="empty-state">No functions found</li>';
+                select.innerHTML = '<option value="">-- No functions --</option>';
+                select.disabled = true;
+                return;
+            }
+
+            list.innerHTML = cfgs.map(cfg => 
+                '<li data-fn="' + escapeHtml(cfg.name) + '">' +
+                '<strong>' + escapeHtml(cfg.name) + '</strong>' +
+                '<div class="function-stats">' +
+                cfg.nodes + ' nodes, ' + cfg.edges + ' edges, ' +
+                (cfg.unreachable > 0 ? '<span style="color: var(--vscode-editorWarning-foreground)">' + cfg.unreachable + ' unreachable</span>' : '0 unreachable') +
+                '</div></li>'
+            ).join('');
+
+            select.innerHTML = '<option value="">-- Select function --</option>' +
+                cfgs.map(cfg => '<option value="' + escapeHtml(cfg.name) + '">' + escapeHtml(cfg.name) + '</option>').join('');
+            select.disabled = false;
+
+            // Add click handlers
+            list.querySelectorAll('li[data-fn]').forEach(li => {
+                li.addEventListener('click', () => {
+                    const fn = li.getAttribute('data-fn');
+                    const cfg = cfgs.find(c => c.name === fn);
+                    if (cfg) {
+                        renderGraph(cfg);
+                        highlightFunction(fn);
+                        select.value = fn;
+                    }
+                });
+            });
+        }
+
+        function highlightFunction(name) {
+            document.querySelectorAll('.function-list li').forEach(li => {
+                li.classList.toggle('selected', li.getAttribute('data-fn') === name);
+            });
+        }
+
+        function renderGraph(cfg) {
+            const container = document.getElementById('graphContainer');
+            
+            if (cfg.mermaid) {
+                container.innerHTML = 
+                    '<h3>' + escapeHtml(cfg.name) + ' (line ' + cfg.start_line + ')</h3>' +
+                    '<p>Language: ' + cfg.language + ' | ' + cfg.nodes + ' nodes | ' + cfg.edges + ' edges | ' + cfg.exits.length + ' exits</p>' +
+                    '<pre class="mermaid-code">' + escapeHtml(cfg.mermaid) + '</pre>' +
+                    '<p style="font-size: 11px; color: var(--vscode-descriptionForeground);">Copy the Mermaid code above and paste it in a Mermaid-compatible viewer to see the diagram.</p>';
+            } else {
+                // Generate a simple Mermaid representation from stats
+                container.innerHTML = 
+                    '<h3>' + escapeHtml(cfg.name) + ' (line ' + cfg.start_line + ')</h3>' +
+                    '<p>Language: ' + cfg.language + '</p>' +
+                    '<p>' + cfg.nodes + ' nodes, ' + cfg.edges + ' edges, ' + cfg.exits.length + ' exit points</p>' +
+                    (cfg.unreachable > 0 ? '<p style="color: var(--vscode-editorWarning-foreground)">⚠️ ' + cfg.unreachable + ' unreachable nodes detected</p>' : '') +
+                    '<p>Exit node IDs: ' + cfg.exits.join(', ') + '</p>';
+            }
+        }
+
+        function renderFindings(findings) {
+            const panel = document.getElementById('findingsPanel');
+            const list = document.getElementById('findingsList');
+            
+            panel.style.display = 'block';
+            list.innerHTML = findings.map(f => 
+                '<div class="finding-item ' + (f.severity || 'info') + '" data-path="' + escapeHtml(f.path) + '" data-line="' + (f.line || '') + '">' +
+                '<strong>[' + (f.category || 'finding') + ']</strong> ' + escapeHtml(f.message) +
+                (f.line ? ' (line ' + f.line + ')' : '') +
+                '</div>'
+            ).join('');
+
+            list.querySelectorAll('.finding-item').forEach(item => {
+                item.addEventListener('click', () => {
+                    const path = item.getAttribute('data-path');
+                    const line = parseInt(item.getAttribute('data-line'), 10) || undefined;
+                    if (path) {
+                        vscode.postMessage({ command: 'openFile', file: path, line });
+                    }
+                });
+            });
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>`;
+    }
+
+    public dispose(): void {
+        FlowMapPanel.currentPanel = undefined;
+        this.panel.dispose();
+        while (this.disposables.length) {
+            const x = this.disposables.pop();
+            if (x) {
+                x.dispose();
+            }
+        }
+    }
+}
+
 export function activate(context: vscode.ExtensionContext): void {
     const config = vscode.workspace.getConfiguration('dwg');
     const userCommand = config.get<string>('command', 'dwg-lsp');
@@ -3452,6 +3997,30 @@ export function activate(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
         vscode.commands.registerCommand('dwg.installSkillCodex', async () => {
             await installSkill(context, 'codex', outputChannel, 'writing');
+        })
+    );
+
+    // Command to open Flow Map panel
+    context.subscriptions.push(
+        vscode.commands.registerCommand('dwg.openFlowMap', async () => {
+            // Get current file if any
+            const activeEditor = vscode.window.activeTextEditor;
+            let filePath: string | undefined;
+            
+            if (activeEditor) {
+                const ext = path.extname(activeEditor.document.fileName).toLowerCase();
+                if (['.rs', '.ts', '.tsx', '.js', '.jsx', '.py'].includes(ext)) {
+                    filePath = activeEditor.document.fileName;
+                }
+            }
+
+            FlowMapPanel.createOrShow(
+                context.extensionUri,
+                cliCommand,
+                configPath,
+                outputChannel,
+                filePath
+            );
         })
     );
 

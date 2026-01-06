@@ -147,6 +147,8 @@ enum FlowCommand {
     Propose(FlowProposeArgs),
     /// Create a new flow spec file (an artifact to review).
     New(FlowNewArgs),
+    /// Generate a control flow graph (CFG) for a function.
+    Graph(FlowGraphArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -255,6 +257,29 @@ struct FlowNewArgs {
     /// Overwrite if the file already exists.
     #[arg(long, action = ArgAction::SetTrue)]
     force: bool,
+}
+
+#[derive(Debug, Parser)]
+struct FlowGraphArgs {
+    /// Source file to analyze.
+    #[arg(long)]
+    file: PathBuf,
+
+    /// Function name to graph (optional - if not provided, graphs all functions).
+    #[arg(long, value_name = "NAME")]
+    r#fn: Option<String>,
+
+    /// Output format: json, mermaid.
+    #[arg(long, default_value = "json")]
+    format: String,
+
+    /// Write output to file.
+    #[arg(long)]
+    out: Option<PathBuf>,
+
+    /// Include logic detector findings in output.
+    #[arg(long, action = ArgAction::SetTrue)]
+    with_logic: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -1272,6 +1297,7 @@ fn run_flow(args: FlowArgs) -> anyhow::Result<()> {
         FlowCommand::Audit(audit_args) => run_flow_audit(audit_args),
         FlowCommand::Propose(propose_args) => run_flow_propose(propose_args),
         FlowCommand::New(new_args) => run_flow_new(new_args),
+        FlowCommand::Graph(graph_args) => run_flow_graph(graph_args),
     }
 }
 
@@ -1445,6 +1471,243 @@ fn run_flow_new(args: FlowNewArgs) -> anyhow::Result<()> {
         "Wrote flow spec: {}",
         rel_path.to_string_lossy().replace('\\', "/")
     );
+    Ok(())
+}
+
+fn run_flow_graph(args: FlowGraphArgs) -> anyhow::Result<()> {
+    use dwg_core::cfg::{build_cfg_rust, ControlFlowGraph, CfgLanguage};
+    use dwg_core::arch::analyze_rust_logic;
+
+    let path = &args.file;
+    if !path.exists() {
+        return Err(anyhow!("File not found: {}", path.display()));
+    }
+
+    let text = fs::read_to_string(path)?;
+    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+
+    let cfgs: Vec<ControlFlowGraph> = match ext {
+        "rs" => {
+            let file = syn::parse_file(&text)
+                .map_err(|e| anyhow!("Failed to parse Rust file: {}", e))?;
+
+            let mut result = Vec::new();
+            for item in &file.items {
+                match item {
+                    syn::Item::Fn(item_fn) => {
+                        let fn_name = item_fn.sig.ident.to_string();
+                        if let Some(ref target) = args.r#fn {
+                            if &fn_name != target {
+                                continue;
+                            }
+                        }
+                        result.push(build_cfg_rust(item_fn, path));
+                    }
+                    syn::Item::Impl(impl_block) => {
+                        let self_ty = match &*impl_block.self_ty {
+                            syn::Type::Path(tp) => tp.path.segments.last()
+                                .map(|s| s.ident.to_string())
+                                .unwrap_or_else(|| "Unknown".into()),
+                            _ => "Unknown".into(),
+                        };
+                        for impl_item in &impl_block.items {
+                            if let syn::ImplItem::Fn(method) = impl_item {
+                                let fn_name = method.sig.ident.to_string();
+                                let full_name = format!("{}::{}", self_ty, fn_name);
+                                if let Some(ref target) = args.r#fn {
+                                    if &fn_name != target && &full_name != target {
+                                        continue;
+                                    }
+                                }
+                                result.push(dwg_core::cfg::build_cfg_rust_method(method, path, &self_ty));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            result
+        }
+        "ts" | "tsx" | "js" | "jsx" => {
+            // For TypeScript/JavaScript, use tree-sitter
+            let is_ts = ext == "ts" || ext == "tsx";
+            let mut parser = tree_sitter::Parser::new();
+            let language = if is_ts {
+                tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
+            } else {
+                tree_sitter_javascript::LANGUAGE.into()
+            };
+            parser.set_language(&language)?;
+
+            let tree = parser.parse(&text, None)
+                .ok_or_else(|| anyhow!("Failed to parse TypeScript/JavaScript file"))?;
+
+            let mut result = Vec::new();
+            let source = text.as_bytes();
+            
+            fn visit_node(
+                node: tree_sitter::Node,
+                source: &[u8],
+                path: &Path,
+                is_ts: bool,
+                target_fn: &Option<String>,
+                result: &mut Vec<ControlFlowGraph>,
+            ) {
+                match node.kind() {
+                    "function_declaration" | "function" | "arrow_function" | "method_definition" => {
+                        // Check function name if target is specified
+                        if let Some(target) = target_fn {
+                            if let Some(name_node) = node.child_by_field_name("name") {
+                                if let Ok(name) = name_node.utf8_text(source) {
+                                    if name != target {
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(cfg) = dwg_core::cfg::build_cfg_ts(node, source, path, is_ts) {
+                            result.push(cfg);
+                        }
+                    }
+                    _ => {
+                        let mut cursor = node.walk();
+                        for child in node.children(&mut cursor) {
+                            visit_node(child, source, path, is_ts, target_fn, result);
+                        }
+                    }
+                }
+            }
+            
+            visit_node(tree.root_node(), source, path, is_ts, &args.r#fn, &mut result);
+            result
+        }
+        "py" => {
+            // For Python, use tree-sitter
+            let mut parser = tree_sitter::Parser::new();
+            let language = tree_sitter_python::LANGUAGE.into();
+            parser.set_language(&language)?;
+
+            let tree = parser.parse(&text, None)
+                .ok_or_else(|| anyhow!("Failed to parse Python file"))?;
+
+            let mut result = Vec::new();
+            let source = text.as_bytes();
+            
+            fn visit_node(
+                node: tree_sitter::Node,
+                source: &[u8],
+                path: &Path,
+                target_fn: &Option<String>,
+                result: &mut Vec<ControlFlowGraph>,
+            ) {
+                if node.kind() == "function_definition" {
+                    if let Some(target) = target_fn {
+                        if let Some(name_node) = node.child_by_field_name("name") {
+                            if let Ok(name) = name_node.utf8_text(source) {
+                                if name != target {
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    if let Some(cfg) = dwg_core::cfg::build_cfg_python(node, source, path) {
+                        result.push(cfg);
+                    }
+                } else {
+                    let mut cursor = node.walk();
+                    for child in node.children(&mut cursor) {
+                        visit_node(child, source, path, target_fn, result);
+                    }
+                }
+            }
+            
+            visit_node(tree.root_node(), source, path, &args.r#fn, &mut result);
+            result
+        }
+        _ => {
+            return Err(anyhow!("Unsupported file type: {}", ext));
+        }
+    };
+
+    if cfgs.is_empty() {
+        if let Some(ref target) = args.r#fn {
+            return Err(anyhow!("Function '{}' not found in {}", target, path.display()));
+        } else {
+            return Err(anyhow!("No functions found in {}", path.display()));
+        }
+    }
+
+    // Include logic findings if requested
+    let logic_findings = if args.with_logic && ext == "rs" {
+        let result = analyze_rust_logic(path, &text);
+        let mut all: Vec<dwg_core::arch::FlowFinding> = Vec::new();
+        all.extend(result.exit_path_findings);
+        all.extend(result.dead_branch_findings);
+        all.extend(result.validation_gap_findings);
+        all.extend(result.error_escalation_findings);
+        Some(all)
+    } else {
+        None
+    };
+
+    // Output
+    #[derive(Serialize)]
+    struct GraphOutput {
+        cfgs: Vec<CfgOutputItem>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        logic_findings: Option<Vec<dwg_core::arch::FlowFinding>>,
+    }
+
+    #[derive(Serialize)]
+    struct CfgOutputItem {
+        name: String,
+        file: String,
+        start_line: u32,
+        language: CfgLanguage,
+        nodes: usize,
+        edges: usize,
+        exits: Vec<u32>,
+        unreachable: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        mermaid: Option<String>,
+    }
+
+    let format = args.format.to_lowercase();
+    let items: Vec<CfgOutputItem> = cfgs.iter().map(|cfg| {
+        CfgOutputItem {
+            name: cfg.name.clone(),
+            file: cfg.path.to_string_lossy().replace('\\', "/"),
+            start_line: cfg.start_line,
+            language: cfg.language,
+            nodes: cfg.nodes.len(),
+            edges: cfg.edges.len(),
+            exits: cfg.exits.clone(),
+            unreachable: cfg.unreachable_nodes().len(),
+            mermaid: if format == "mermaid" { Some(cfg.to_mermaid()) } else { None },
+        }
+    }).collect();
+
+    let output = GraphOutput {
+        cfgs: items,
+        logic_findings,
+    };
+
+    let output_str = if format == "mermaid" {
+        // For mermaid, just output the diagram(s)
+        cfgs.iter().map(|cfg| {
+            format!("## {}\n\n```mermaid\n{}\n```\n", cfg.name, cfg.to_mermaid())
+        }).collect::<Vec<_>>().join("\n")
+    } else {
+        serde_json::to_string_pretty(&output)?
+    };
+
+    if let Some(out) = &args.out {
+        fs::write(out, &output_str)?;
+        println!("Wrote CFG output to: {}", out.display());
+    } else {
+        println!("{}", output_str);
+    }
+
     Ok(())
 }
 
