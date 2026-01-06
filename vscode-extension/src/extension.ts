@@ -2583,12 +2583,15 @@ export function activate(context: vscode.ExtensionContext): void {
                     },
                     async (progress) => {
                         progress.report({ message: 'Running flow audit…' });
+                        const flowsDir = path.join(workspaceRoot, 'flows');
                         await runCli(
                             [
                                 'flow',
                                 'audit',
                                 '--config',
                                 configPath,
+                                '--flows',
+                                flowsDir,
                                 '--out',
                                 auditPath,
                                 workspaceRoot,
@@ -2603,6 +2606,8 @@ export function activate(context: vscode.ExtensionContext): void {
                                 'propose',
                                 '--config',
                                 configPath,
+                                '--flows',
+                                flowsDir,
                                 '--out',
                                 proposalPath,
                                 workspaceRoot,
@@ -2706,7 +2711,8 @@ export function activate(context: vscode.ExtensionContext): void {
             }
             const workspaceRoot = workspaceFolders[0].uri.fsPath;
             const reportPath = path.join(workspaceRoot, 'reports', 'flow-audit.json');
-            const args = ['flow', 'audit', '--config', configPath, '--out', reportPath, workspaceRoot];
+            const flowsDir = path.join(workspaceRoot, 'flows');
+            const args = ['flow', 'audit', '--config', configPath, '--flows', flowsDir, '--out', reportPath, workspaceRoot];
 
             outputChannel.show(true);
             outputChannel.appendLine(`ToneGuard: Running flow audit...`);
@@ -2766,11 +2772,14 @@ export function activate(context: vscode.ExtensionContext): void {
             }
             const workspaceRoot = workspaceFolders[0].uri.fsPath;
             const reportPath = path.join(workspaceRoot, 'reports', 'flow-proposal.md');
+            const flowsDir = path.join(workspaceRoot, 'flows');
             const args = [
                 'flow',
                 'propose',
                 '--config',
                 configPath,
+                '--flows',
+                flowsDir,
                 '--out',
                 reportPath,
                 workspaceRoot,

@@ -1282,33 +1282,30 @@ impl TsAggregate {
     fn emit_findings(&self, findings: &mut Vec<FlowFinding>, config: &FlowAuditConfig) {
         for iface in &self.interface_defs {
             let count = self.interface_impls.get(&iface.name).copied().unwrap_or(0);
-            if count <= 1 {
+            // TypeScript interfaces with 0 implementations are typically type definitions
+            // (like `interface Config { ... }`), which is normal and expected.
+            // Only flag interfaces with exactly 1 implementation as "lonely abstractions"
+            // since that suggests unnecessary indirection.
+            if count == 1 {
                 findings.push(FlowFinding {
                     category: FindingCategory::LonelyAbstraction,
-                    severity: if count == 0 {
-                        FindingSeverity::Warning
-                    } else {
-                        FindingSeverity::Info
-                    },
+                    severity: FindingSeverity::Info,
                     confidence: FindingConfidence::Medium,
                     message: format!(
-                        "Interface `{}` has {} implementation{}.",
+                        "Interface `{}` has only 1 implementation. Consider inlining.",
                         iface.name,
-                        count,
-                        if count == 1 { "" } else { "s" }
                     ),
                     path: to_display_path(&iface.path, config),
                     line: iface.line,
                     symbol: Some(iface.name.clone()),
                     language: iface.language.clone(),
-                    evidence: vec!["Interface has <=1 implements in scan.".into()],
+                    evidence: vec!["Interface has exactly 1 implements in scan.".into()],
                     fix_instructions: Some(FixInstructions {
-                        action: if count == 0 { "remove".into() } else { "inline".into() },
-                        description: if count == 0 {
-                            format!("Remove unused interface `{}` or add implementations", iface.name)
-                        } else {
-                            format!("Inline interface `{}` into its single implementation, or add more implementations", iface.name)
-                        },
+                        action: "inline".into(),
+                        description: format!(
+                            "Inline interface `{}` into its single implementation, or add more implementations",
+                            iface.name
+                        ),
                         find_pattern: Some(format!(r"interface\s+{}\s*\{{", regex::escape(&iface.name))),
                         replace_pattern: None,
                         alternative: Some("Add justification to flow spec with reason: variation".into()),
