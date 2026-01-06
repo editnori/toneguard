@@ -41,6 +41,23 @@ pub enum FindingConfidence {
     Low,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FixInstructions {
+    /// What action to take: "inline", "extract", "remove", "justify"
+    pub action: String,
+    /// Human-readable description of the fix
+    pub description: String,
+    /// Regex pattern to find the problematic code (for AI agents)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub find_pattern: Option<String>,
+    /// Replacement pattern (for AI agents)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replace_pattern: Option<String>,
+    /// Alternative fix option
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alternative: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlowFinding {
     pub category: FindingCategory,
@@ -52,6 +69,9 @@ pub struct FlowFinding {
     pub symbol: Option<String>,
     pub language: Language,
     pub evidence: Vec<String>,
+    /// Machine-readable fix instructions for AI agents
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fix_instructions: Option<FixInstructions>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -273,9 +293,19 @@ fn emit_duplication_findings(
             ),
             path,
             line,
-            symbol,
+            symbol: symbol.clone(),
             language: group.language,
             evidence,
+            fix_instructions: Some(FixInstructions {
+                action: "extract".into(),
+                description: format!(
+                    "Extract duplicated logic into a shared function/module. This code appears {} times.",
+                    group.occurrences.len()
+                ),
+                find_pattern: None,
+                replace_pattern: None,
+                alternative: Some("Add justification to flow spec with reason: reuse".into()),
+            }),
         });
     }
 }
@@ -689,6 +719,17 @@ impl RustAggregate {
                     symbol: Some(trait_info.name.clone()),
                     language: Language::Rust,
                     evidence: vec!["Trait has <=1 impl in repo scan.".into()],
+                    fix_instructions: Some(FixInstructions {
+                        action: if count == 0 { "remove".into() } else { "inline".into() },
+                        description: if count == 0 {
+                            format!("Remove unused trait `{}` or add implementations", trait_info.name)
+                        } else {
+                            format!("Inline trait `{}` into its single implementation, or add more implementations to justify the abstraction", trait_info.name)
+                        },
+                        find_pattern: Some(format!(r"trait\s+{}\s*\{{", regex::escape(&trait_info.name))),
+                        replace_pattern: None,
+                        alternative: Some("Add justification to flow spec with reason: variation".into()),
+                    }),
                 });
             }
         }
@@ -713,6 +754,8 @@ impl RustAggregate {
                 if chain.len() >= 2 {
                     seen.extend(chain.iter().cloned());
                     let chain_msg = chain.join(" -> ");
+                    let first_fn = chain.first().cloned().unwrap_or_default();
+                    let last_fn = chain.last().cloned().unwrap_or_default();
                     findings.push(FlowFinding {
                         category: FindingCategory::PassThrough,
                         severity: FindingSeverity::Info,
@@ -727,6 +770,16 @@ impl RustAggregate {
                         symbol: Some(caller.clone()),
                         language: Language::Rust,
                         evidence: vec![format!("Forward-only functions: {}", chain_msg)],
+                        fix_instructions: Some(FixInstructions {
+                            action: "inline".into(),
+                            description: format!(
+                                "Inline `{}` by replacing calls with direct calls to `{}`",
+                                first_fn, last_fn
+                            ),
+                            find_pattern: Some(format!(r"{}\\s*\\(", regex::escape(&first_fn))),
+                            replace_pattern: Some(format!("{}(", last_fn)),
+                            alternative: Some("Add justification to flow spec with reason: isolation".into()),
+                        }),
                     });
                 }
             }
@@ -887,12 +940,19 @@ fn analyze_rust_file(path: &Path, text: &str) -> RustFileReport {
                         category: FindingCategory::Placeholder,
                         severity: placeholder.severity,
                         confidence: FindingConfidence::High,
-                        message: placeholder.message,
+                        message: placeholder.message.clone(),
                         path: path.to_string_lossy().replace('\\', "/"),
                         line: placeholder.line,
                         symbol: Some(fn_name.clone()),
                         language: Language::Rust,
-                        evidence: vec![placeholder.evidence],
+                        evidence: vec![placeholder.evidence.clone()],
+                        fix_instructions: Some(FixInstructions {
+                            action: "implement".into(),
+                            description: format!("Implement the placeholder in `{}`", fn_name),
+                            find_pattern: Some(r"(todo|unimplemented)!\s*\([^)]*\)".into()),
+                            replace_pattern: None,
+                            alternative: Some("Remove function if not needed, or add justification with reason: policy".into()),
+                        }),
                     });
                 }
             }
@@ -943,12 +1003,19 @@ fn analyze_rust_file(path: &Path, text: &str) -> RustFileReport {
                                 category: FindingCategory::Placeholder,
                                 severity: placeholder.severity,
                                 confidence: FindingConfidence::High,
-                                message: placeholder.message,
+                                message: placeholder.message.clone(),
                                 path: path.to_string_lossy().replace('\\', "/"),
                                 line: placeholder.line,
                                 symbol: Some(symbol.clone()),
                                 language: Language::Rust,
-                                evidence: vec![placeholder.evidence],
+                                evidence: vec![placeholder.evidence.clone()],
+                                fix_instructions: Some(FixInstructions {
+                                    action: "implement".into(),
+                                    description: format!("Implement the placeholder in `{}`", symbol),
+                                    find_pattern: Some(r"(todo|unimplemented)!\s*\([^)]*\)".into()),
+                                    replace_pattern: None,
+                                    alternative: Some("Remove method if not needed, or add justification with reason: policy".into()),
+                                }),
                             });
                         }
                     }
@@ -1235,6 +1302,17 @@ impl TsAggregate {
                     symbol: Some(iface.name.clone()),
                     language: iface.language.clone(),
                     evidence: vec!["Interface has <=1 implements in scan.".into()],
+                    fix_instructions: Some(FixInstructions {
+                        action: if count == 0 { "remove".into() } else { "inline".into() },
+                        description: if count == 0 {
+                            format!("Remove unused interface `{}` or add implementations", iface.name)
+                        } else {
+                            format!("Inline interface `{}` into its single implementation, or add more implementations", iface.name)
+                        },
+                        find_pattern: Some(format!(r"interface\s+{}\s*\{{", regex::escape(&iface.name))),
+                        replace_pattern: None,
+                        alternative: Some("Add justification to flow spec with reason: variation".into()),
+                    }),
                 });
             }
         }
@@ -1258,6 +1336,8 @@ impl TsAggregate {
                 if chain.len() >= 2 {
                     seen.extend(chain.iter().cloned());
                     let chain_msg = chain.join(" -> ");
+                    let first_fn = chain.first().cloned().unwrap_or_default();
+                    let last_fn = chain.last().cloned().unwrap_or_default();
                     findings.push(FlowFinding {
                         category: FindingCategory::PassThrough,
                         severity: FindingSeverity::Info,
@@ -1272,6 +1352,16 @@ impl TsAggregate {
                         symbol: Some(caller.clone()),
                         language: info.language.clone(),
                         evidence: vec![format!("Forward-only functions: {}", chain_msg)],
+                        fix_instructions: Some(FixInstructions {
+                            action: "inline".into(),
+                            description: format!(
+                                "Inline `{}` by replacing calls with direct calls to `{}`",
+                                first_fn, last_fn
+                            ),
+                            find_pattern: Some(format!(r"{}\\s*\\(", regex::escape(&first_fn))),
+                            replace_pattern: Some(format!("{}(", last_fn)),
+                            alternative: Some("Add justification to flow spec with reason: isolation".into()),
+                        }),
                     });
                 }
             }
@@ -1518,6 +1608,13 @@ fn analyze_ts_file(path: &Path, text: &str, language: &Language) -> TsFileReport
                                         evidence: vec![
                                             "throw statement with TODO/NotImplemented".into()
                                         ],
+                                        fix_instructions: Some(FixInstructions {
+                                            action: "implement".into(),
+                                            description: format!("Implement the placeholder in `{}`", name),
+                                            find_pattern: Some(r#"throw\s+["']?(TODO|not\s+implemented)"#.into()),
+                                            replace_pattern: None,
+                                            alternative: Some("Remove function if not needed, or add justification with reason: policy".into()),
+                                        }),
                                     });
                                 }
                             }
@@ -1573,6 +1670,13 @@ fn analyze_ts_file(path: &Path, text: &str, language: &Language) -> TsFileReport
                                             evidence: vec![
                                                 "throw statement with TODO/NotImplemented".into(),
                                             ],
+                                            fix_instructions: Some(FixInstructions {
+                                                action: "implement".into(),
+                                                description: format!("Implement the placeholder in `{}`", name),
+                                                find_pattern: Some(r#"throw\s+["']?(TODO|not\s+implemented)"#.into()),
+                                                replace_pattern: None,
+                                                alternative: Some("Remove function if not needed, or add justification with reason: policy".into()),
+                                            }),
                                         });
                                     }
                                 }
@@ -1645,6 +1749,17 @@ impl PyAggregate {
                     symbol: Some(abs.name.clone()),
                     language: Language::Python,
                     evidence: vec!["ABC/Protocol has <=1 subclass in scan.".into()],
+                    fix_instructions: Some(FixInstructions {
+                        action: if count == 0 { "remove".into() } else { "inline".into() },
+                        description: if count == 0 {
+                            format!("Remove unused abstract class `{}` or add subclasses", abs.name)
+                        } else {
+                            format!("Inline abstract class `{}` into its single subclass, or add more subclasses", abs.name)
+                        },
+                        find_pattern: Some(format!(r"class\s+{}\s*\(", regex::escape(&abs.name))),
+                        replace_pattern: None,
+                        alternative: Some("Add justification to flow spec with reason: variation".into()),
+                    }),
                 });
             }
         }
@@ -1668,6 +1783,8 @@ impl PyAggregate {
                 if chain.len() >= 2 {
                     seen.extend(chain.iter().cloned());
                     let chain_msg = chain.join(" -> ");
+                    let first_fn = chain.first().cloned().unwrap_or_default();
+                    let last_fn = chain.last().cloned().unwrap_or_default();
                     findings.push(FlowFinding {
                         category: FindingCategory::PassThrough,
                         severity: FindingSeverity::Info,
@@ -1682,6 +1799,16 @@ impl PyAggregate {
                         symbol: Some(caller.clone()),
                         language: Language::Python,
                         evidence: vec![format!("Forward-only functions: {}", chain_msg)],
+                        fix_instructions: Some(FixInstructions {
+                            action: "inline".into(),
+                            description: format!(
+                                "Inline `{}` by replacing calls with direct calls to `{}`",
+                                first_fn, last_fn
+                            ),
+                            find_pattern: Some(format!(r"{}\\s*\\(", regex::escape(&first_fn))),
+                            replace_pattern: Some(format!("{}(", last_fn)),
+                            alternative: Some("Add justification to flow spec with reason: isolation".into()),
+                        }),
                     });
                 }
             }
@@ -1927,6 +2054,13 @@ fn analyze_py_file(path: &Path, text: &str) -> PyFileReport {
                                     symbol: Some(name.clone()),
                                     language: Language::Python,
                                     evidence: vec!["pass/ellipsis/NotImplementedError".into()],
+                                    fix_instructions: Some(FixInstructions {
+                                        action: "implement".into(),
+                                        description: format!("Implement the placeholder in `{}`", name),
+                                        find_pattern: Some(r"(pass|\.\.\.|\.\.\.\s*#|raise\s+NotImplementedError)".into()),
+                                        replace_pattern: None,
+                                        alternative: Some("Remove function if not needed, or add justification with reason: policy".into()),
+                                    }),
                                 });
                             }
                         }

@@ -2,27 +2,27 @@
   "flow_check": {
     "files": [
       {
-        "path": "flows/cli-calibrate.md",
+        "path": "/home/layth888/Desktop/toneguard/flows/cli-calibrate.md",
         "issues": []
       },
       {
-        "path": "flows/cli-lint.md",
+        "path": "/home/layth888/Desktop/toneguard/flows/cli-lint.md",
         "issues": []
       },
       {
-        "path": "flows/cli-comments.md",
+        "path": "/home/layth888/Desktop/toneguard/flows/cli-comments.md",
         "issues": []
       },
       {
-        "path": "flows/flow-propose.md",
+        "path": "/home/layth888/Desktop/toneguard/flows/flow-propose.md",
         "issues": []
       },
       {
-        "path": "flows/lsp-diagnostics.md",
+        "path": "/home/layth888/Desktop/toneguard/flows/lsp-diagnostics.md",
         "issues": []
       },
       {
-        "path": "flows/flow-audit.md",
+        "path": "/home/layth888/Desktop/toneguard/flows/flow-audit.md",
         "issues": []
       }
     ],
@@ -45,34 +45,8 @@
         "category": "pass-through",
         "severity": "info",
         "confidence": "high",
-        "message": "Pass-through wrapper chain length 2: percent_claim_is_contextual -> is_match",
-        "path": "./core/src/lib.rs",
-        "line": 4019,
-        "symbol": "percent_claim_is_contextual",
-        "language": "rust",
-        "evidence": [
-          "Forward-only functions: percent_claim_is_contextual -> is_match"
-        ]
-      },
-      {
-        "category": "pass-through",
-        "severity": "info",
-        "confidence": "high",
-        "message": "Pass-through wrapper chain length 2: sentence_has_specifics -> is_match",
-        "path": "./core/src/lib.rs",
-        "line": 4011,
-        "symbol": "sentence_has_specifics",
-        "language": "rust",
-        "evidence": [
-          "Forward-only functions: sentence_has_specifics -> is_match"
-        ]
-      },
-      {
-        "category": "pass-through",
-        "severity": "info",
-        "confidence": "high",
         "message": "Pass-through wrapper chain length 2: sentence_has_citation -> is_match",
-        "path": "./core/src/lib.rs",
+        "path": "core/src/lib.rs",
         "line": 4015,
         "symbol": "sentence_has_citation",
         "language": "rust",
@@ -84,13 +58,39 @@
         "category": "pass-through",
         "severity": "info",
         "confidence": "high",
+        "message": "Pass-through wrapper chain length 2: percent_claim_is_contextual -> is_match",
+        "path": "core/src/lib.rs",
+        "line": 4019,
+        "symbol": "percent_claim_is_contextual",
+        "language": "rust",
+        "evidence": [
+          "Forward-only functions: percent_claim_is_contextual -> is_match"
+        ]
+      },
+      {
+        "category": "pass-through",
+        "severity": "info",
+        "confidence": "high",
         "message": "Pass-through wrapper chain length 2: is_emoji_hint -> contains",
-        "path": "./core/src/lib.rs",
+        "path": "core/src/lib.rs",
         "line": 3791,
         "symbol": "is_emoji_hint",
         "language": "rust",
         "evidence": [
           "Forward-only functions: is_emoji_hint -> contains"
+        ]
+      },
+      {
+        "category": "pass-through",
+        "severity": "info",
+        "confidence": "high",
+        "message": "Pass-through wrapper chain length 2: sentence_has_specifics -> is_match",
+        "path": "core/src/lib.rs",
+        "line": 4011,
+        "symbol": "sentence_has_specifics",
+        "language": "rust",
+        "evidence": [
+          "Forward-only functions: sentence_has_specifics -> is_match"
         ]
       }
     ]

@@ -1760,6 +1760,7 @@ fn render_flow_proposal(flow_check: &Option<FlowCheckReport>, audit: &FlowAuditR
     let mut out = String::new();
     out.push_str("# ToneGuard Flow Proposal\n\n");
     out.push_str("A concrete review artifact: flow spec checks + static entropy findings.\n\n");
+    out.push_str("> **For AI Agents**: Each finding includes machine-readable fix instructions in JSON format.\n\n");
     out.push_str("## Flow checks\n\n");
     match flow_check {
         Some(report) => {
@@ -1814,7 +1815,7 @@ fn render_flow_proposal(flow_check: &Option<FlowCheckReport>, audit: &FlowAuditR
     out.push('\n');
 
     if audit.findings.is_empty() {
-        out.push_str("## Findings\n\nNo findings.\n");
+        out.push_str("## Findings\n\nNo findings. Code is clean.\n");
         return out;
     }
 
@@ -1832,29 +1833,83 @@ fn render_flow_proposal(flow_check: &Option<FlowCheckReport>, audit: &FlowAuditR
         for finding in items {
             let location = finding
                 .line
-                .map(|l| format!(":{}:", l))
-                .unwrap_or_else(|| ":".into());
+                .map(|l| format!(":{}", l))
+                .unwrap_or_default();
+            
+            // Header with location
             out.push_str(&format!(
-                "- [{}] {}{} {}\n",
-                format!("{:?}", finding.severity),
+                "#### [{:?}] `{}{}`\n\n",
+                finding.severity,
                 finding.path,
                 location,
-                finding.message
             ));
-            if !finding.evidence.is_empty() {
-                out.push_str("  - Evidence:\n");
-                for ev in &finding.evidence {
-                    out.push_str(&format!("    - {ev}\n"));
+            
+            // What: the problem
+            out.push_str(&format!("**What**: {}\n\n", finding.message));
+            
+            // Fix options (human-readable)
+            if let Some(fix) = &finding.fix_instructions {
+                out.push_str("**Fix options**:\n");
+                out.push_str(&format!("1. **{}**: {}\n", capitalize_first(&fix.action), fix.description));
+                if let Some(alt) = &fix.alternative {
+                    out.push_str(&format!("2. **Justify**: {}\n", alt));
                 }
+                out.push('\n');
+                
+                // Machine-readable JSON for AI agents
+                out.push_str("**For AI agents**:\n\n");
+                out.push_str("```json\n");
+                let json_fix = serde_json::json!({
+                    "file": finding.path,
+                    "line": finding.line,
+                    "action": fix.action,
+                    "find": fix.find_pattern,
+                    "replace": fix.replace_pattern,
+                    "alternative": fix.alternative
+                });
+                if let Ok(json_str) = serde_json::to_string_pretty(&json_fix) {
+                    out.push_str(&json_str);
+                }
+                out.push_str("\n```\n\n");
             }
+            
+            // Evidence
+            if !finding.evidence.is_empty() {
+                out.push_str("**Evidence**:\n");
+                for ev in &finding.evidence {
+                    out.push_str(&format!("- {ev}\n"));
+                }
+                out.push('\n');
+            }
+            
+            out.push_str("---\n\n");
         }
-        out.push('\n');
     }
 
-    out.push_str("## Next steps\n\n");
-    out.push_str("- Either reduce the finding, or justify it in a flow spec under `justifications` (reason: variation/isolation/reuse/policy/volatility).\n");
-    out.push_str("- Keep logic in a readable, end-to-end flow: fewer hops, fewer knobs, clearer invariants.\n");
+    out.push_str("## How to use this document\n\n");
+    out.push_str("### For humans\n");
+    out.push_str("1. Review each finding above\n");
+    out.push_str("2. Either fix the issue OR justify it in a flow spec\n");
+    out.push_str("3. Re-run `dwg flow propose` to verify fixes\n\n");
+    out.push_str("### For AI agents (Claude/Codex)\n");
+    out.push_str("1. Parse the JSON blocks for each finding\n");
+    out.push_str("2. Apply the suggested `find`/`replace` patterns\n");
+    out.push_str("3. If justification is more appropriate, add to `flows/*.md` under `justifications:`\n\n");
+    out.push_str("### Justification reasons\n");
+    out.push_str("- `variation`: The abstraction exists because implementations will differ\n");
+    out.push_str("- `isolation`: The wrapper isolates callers from implementation changes\n");
+    out.push_str("- `reuse`: The duplicated code is intentionally repeated (not DRY by design)\n");
+    out.push_str("- `policy`: Business/security policy requires this structure\n");
+    out.push_str("- `volatility`: This code changes frequently; abstraction reduces blast radius\n");
     out
+}
+
+fn capitalize_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
 }
 
 fn collect_comment_files(
