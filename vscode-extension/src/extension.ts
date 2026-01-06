@@ -14,8 +14,14 @@ let client: LanguageClient | undefined;
 // Skill installation state key
 const SKILL_PROMPT_DISMISSED_KEY = 'toneguard.skillPromptDismissed';
 
-type AIEnvironment = 'claude' | 'codex' | null;
+type AIEnvironment = 'cursor' | 'claude' | 'codex';
 type SkillKind = 'writing' | 'logic-flow';
+
+type DetectedEnvironments = {
+    cursor: boolean;
+    claude: boolean;
+    codex: boolean;
+};
 
 type SidebarNode =
     | { kind: 'info'; label: string; description?: string }
@@ -32,15 +38,19 @@ type DashboardState = {
     flowsCount: number | null;
     lastAudit: { when: string; findings: number } | null;
     lastProposal: { when: string } | null;
-    detectedEnv: AIEnvironment;
+    detectedEnvs: DetectedEnvironments;
     skills: {
-        writing: { claude: boolean; codex: boolean };
-        'logic-flow': { claude: boolean; codex: boolean };
+        writing: { cursor: boolean; claude: boolean; codex: boolean };
+        'logic-flow': { cursor: boolean; claude: boolean; codex: boolean };
     };
     profileOptions: string[];
     currentProfile: string;
     settings: { strict: boolean; noRepoChecks: boolean };
     configEditable: boolean;
+    // Config details for the new config panel
+    enabledCategories: string[];
+    ignoreGlobs: string[];
+    enabledFileTypes: string[];
 };
 
 const SKILL_META: Record<
@@ -351,7 +361,7 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
             case 'openConfig': {
                 const config = this.getRuntimeConfig();
                 await openConfigFile(this.context, config.configPath);
-                return;
+        return;
             }
             case 'addIgnore': {
                 const raw = typeof message.value === 'string' ? message.value : '';
@@ -414,10 +424,11 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                 const envRaw = typeof message.env === 'string' ? message.env : '';
                 const kindRaw = typeof message.kind === 'string' ? message.kind : '';
                 const kind = kindRaw === 'logic-flow' ? 'logic-flow' : 'writing';
-                if (envRaw === 'both') {
+                if (envRaw === 'all') {
+                    await installSkill(this.context, 'cursor', this.outputChannel, kind);
                     await installSkill(this.context, 'claude', this.outputChannel, kind);
                     await installSkill(this.context, 'codex', this.outputChannel, kind);
-                } else if (envRaw === 'claude' || envRaw === 'codex') {
+                } else if (envRaw === 'cursor' || envRaw === 'claude' || envRaw === 'codex') {
                     await installSkill(
                         this.context,
                         envRaw,
@@ -426,6 +437,67 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                     );
                 }
                 await this.refresh();
+                return;
+            }
+            case 'toggleCategory': {
+                const category = typeof message.category === 'string' ? message.category : '';
+                const enabled = Boolean(message.enabled);
+                const config = this.getRuntimeConfig();
+                await toggleCategoryInConfig(
+                    this.context,
+                    config.configPath,
+                    category,
+                    enabled,
+                    this.outputChannel
+                );
+                await this.refresh();
+                return;
+            }
+            case 'removeIgnore': {
+                const glob = typeof message.glob === 'string' ? message.glob : '';
+                const config = this.getRuntimeConfig();
+                await removeIgnoreGlobFromConfig(
+                    this.context,
+                    config.configPath,
+                    glob,
+                    this.outputChannel
+                );
+                await this.refresh();
+                return;
+            }
+            case 'toggleFileType': {
+                const fileType = typeof message.fileType === 'string' ? message.fileType : '';
+                const enabled = Boolean(message.enabled);
+                const config = this.getRuntimeConfig();
+                await toggleFileTypeInConfig(
+                    this.context,
+                    config.configPath,
+                    fileType,
+                    enabled,
+                    this.outputChannel
+                );
+                await this.refresh();
+                return;
+            }
+            case 'fixWithCursor': {
+                const findings = message.findings;
+                if (Array.isArray(findings) && findings.length > 0) {
+                    await fixWithAI(this.context, findings, 'cursor', this.outputChannel);
+                }
+                return;
+            }
+            case 'fixWithClaude': {
+                const findings = message.findings;
+                if (Array.isArray(findings) && findings.length > 0) {
+                    await fixWithAI(this.context, findings, 'claude', this.outputChannel);
+                }
+                return;
+            }
+            case 'fixWithCodex': {
+                const findings = message.findings;
+                if (Array.isArray(findings) && findings.length > 0) {
+                    await fixWithAI(this.context, findings, 'codex', this.outputChannel);
+                }
                 return;
             }
             default:
@@ -502,7 +574,7 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
             }
         }
 
-        const detectedEnv = await detectAIEnvironment();
+        const detectedEnvs = detectAIEnvironments();
         const profileOptions =
             absConfigPath && fs.existsSync(absConfigPath)
                 ? extractProfilesFromConfig(absConfigPath)
@@ -516,6 +588,18 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
             configExists && workspaceRoot && absConfigPath
                 ? isPathInside(workspaceRoot, absConfigPath)
                 : false;
+
+        // Extract config details for the config panel
+        const disabledCategories = absConfigPath && configExists
+            ? extractDisabledCategoriesFromConfig(absConfigPath)
+            : [];
+        const enabledCategories = ALL_CATEGORIES.filter(c => !disabledCategories.includes(c));
+        const ignoreGlobs = absConfigPath && configExists
+            ? extractIgnoreGlobsFromConfig(absConfigPath)
+            : [];
+        const enabledFileTypes = absConfigPath && configExists
+            ? extractEnabledFileTypesFromConfig(absConfigPath)
+            : ALL_FILE_TYPES;
 
         return {
             platform,
@@ -538,13 +622,15 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
             flowsCount,
             lastAudit,
             lastProposal,
-            detectedEnv,
+            detectedEnvs,
             skills: {
                 writing: {
+                    cursor: isSkillInstalled('cursor', 'writing'),
                     claude: isSkillInstalled('claude', 'writing'),
                     codex: isSkillInstalled('codex', 'writing'),
                 },
                 'logic-flow': {
+                    cursor: isSkillInstalled('cursor', 'logic-flow'),
                     claude: isSkillInstalled('claude', 'logic-flow'),
                     codex: isSkillInstalled('codex', 'logic-flow'),
                 },
@@ -556,6 +642,9 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                 noRepoChecks,
             },
             configEditable,
+            enabledCategories,
+            ignoreGlobs,
+            enabledFileTypes,
         };
     }
 
@@ -727,6 +816,78 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
             background: var(--tg-border);
             margin: 4px 0;
         }
+
+        .toggle-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 6px;
+        }
+
+        .toggle-grid label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .toggle-grid input[type="checkbox"] {
+            margin: 0;
+        }
+
+        .tag-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 8px;
+        }
+
+        .tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 3px 8px;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid var(--tg-border);
+            border-radius: 999px;
+            font-size: 11px;
+        }
+
+        .tag button {
+            padding: 0 4px;
+            border: none;
+            background: transparent;
+            color: var(--tg-muted);
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .tag button:hover {
+            color: var(--vscode-errorForeground);
+        }
+
+        .help {
+            color: var(--tg-muted);
+            cursor: help;
+            font-size: 11px;
+        }
+
+        .fix-buttons {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+
+        .fix-buttons button {
+            flex: 1;
+            min-width: 80px;
+        }
+
+        .empty-state {
+            color: var(--tg-muted);
+            font-size: 11px;
+            font-style: italic;
+        }
     </style>
 </head>
 <body>
@@ -783,16 +944,18 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
         </div>
 
         <div>
-            <div class="section-title">Skills</div>
+            <div class="section-title">AI Skills</div>
             <div class="card">
                 <div class="card-row">
-                    <span class="label">Detected</span>
-                    <span class="badge" id="detectedEnv"></span>
-                </div>
-                <div class="divider"></div>
-                <div class="card-row">
                     <strong class="value">Writing Style</strong>
-                    <button class="secondary" data-action="installSkill" data-kind="writing" data-env="both">Install Both</button>
+                    <button class="secondary" data-action="installSkill" data-kind="writing" data-env="all">Install All</button>
+                </div>
+                <div class="card-row" data-skill="writing" data-env="cursor">
+                    <span class="label">Cursor</span>
+                    <div class="input-row">
+                        <span class="badge" data-skill-badge>Not installed</span>
+                        <button data-action="installSkill" data-kind="writing" data-env="cursor">Install</button>
+                    </div>
                 </div>
                 <div class="card-row" data-skill="writing" data-env="claude">
                     <span class="label">Claude Code</span>
@@ -811,7 +974,14 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                 <div class="divider"></div>
                 <div class="card-row">
                     <strong class="value">Logic Flow Guardrails</strong>
-                    <button class="secondary" data-action="installSkill" data-kind="logic-flow" data-env="both">Install Both</button>
+                    <button class="secondary" data-action="installSkill" data-kind="logic-flow" data-env="all">Install All</button>
+                </div>
+                <div class="card-row" data-skill="logic-flow" data-env="cursor">
+                    <span class="label">Cursor</span>
+                    <div class="input-row">
+                        <span class="badge" data-skill-badge>Not installed</span>
+                        <button data-action="installSkill" data-kind="logic-flow" data-env="cursor">Install</button>
+                    </div>
                 </div>
                 <div class="card-row" data-skill="logic-flow" data-env="claude">
                     <span class="label">Claude Code</span>
@@ -831,31 +1001,48 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
         </div>
 
         <div>
-            <div class="section-title">Config Helper</div>
+            <div class="section-title">Categories <span class="help" title="Toggle which checks to run">(?)</span></div>
             <div class="card">
-                <div class="card-row">
-                    <span class="label">Open config</span>
-                    <button class="secondary" data-action="openConfig">Open</button>
-                </div>
-                <div class="card-row">
-                    <span class="label">Add ignore glob</span>
-                </div>
+                <div id="categoryToggles" class="toggle-grid"></div>
+            </div>
+        </div>
+
+        <div>
+            <div class="section-title">Ignore Patterns</div>
+            <div class="card">
+                <div id="ignoreGlobsList" class="tag-list"></div>
                 <div class="input-row">
                     <input id="ignoreInput" type="text" placeholder="e.g. **/dist/**" />
                     <button class="secondary" data-action="addIgnore">Add</button>
                 </div>
-                <div class="divider"></div>
+            </div>
+        </div>
+
+        <div>
+            <div class="section-title">File Types</div>
+            <div class="card">
+                <div id="fileTypeToggles" class="toggle-grid"></div>
+            </div>
+        </div>
+
+        <div>
+            <div class="section-title">Profiles <span class="help" title="Profiles apply different rules to different file types">(?)</span></div>
+            <div class="card">
                 <div class="card-row">
                     <span class="label">Active profile</span>
                     <span class="value" id="currentProfile"></span>
                 </div>
                 <div class="input-row">
-                    <button class="ghost" data-action="clearProfile">Clear profile</button>
-                </div>
-                <div class="card-row">
-                    <span class="label">Profiles in config</span>
+                    <button class="ghost" data-action="clearProfile">Clear</button>
                 </div>
                 <div id="profileOptions" class="input-row" style="flex-wrap: wrap;"></div>
+            </div>
+        </div>
+
+        <div>
+            <div class="section-title">Config</div>
+            <div class="card">
+                <button class="secondary" data-action="openConfig">Open Config File</button>
             </div>
         </div>
 
@@ -924,13 +1111,71 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                 setText('lastProposal', 'none');
             }
 
-            const detected = state.detectedEnv ? state.detectedEnv : 'none';
-            setText('detectedEnv', detected);
-
             setText(
                 'currentProfile',
                 state.currentProfile ? state.currentProfile : 'auto'
             );
+
+            // Render category toggles
+            const categoryWrap = document.getElementById('categoryToggles');
+            if (categoryWrap) {
+                categoryWrap.innerHTML = '';
+                const allCats = ['buzzword', 'puffery', 'confidence', 'filler', 'transition', 'hedge', 'emoji', 'cliche', 'passive', 'uniformity', 'repetition'];
+                const enabled = Array.isArray(state.enabledCategories) ? state.enabledCategories : allCats;
+                allCats.forEach((cat) => {
+                    const label = document.createElement('label');
+                    const checkbox = document.createElement('input');
+                    checkbox.type = 'checkbox';
+                    checkbox.checked = enabled.includes(cat);
+                    checkbox.dataset.category = cat;
+                    label.appendChild(checkbox);
+                    label.appendChild(document.createTextNode(cat));
+                    categoryWrap.appendChild(label);
+                });
+            }
+
+            // Render ignore globs
+            const ignoreWrap = document.getElementById('ignoreGlobsList');
+            if (ignoreWrap) {
+                ignoreWrap.innerHTML = '';
+                const globs = Array.isArray(state.ignoreGlobs) ? state.ignoreGlobs : [];
+                if (globs.length === 0) {
+                    const empty = document.createElement('span');
+                    empty.className = 'empty-state';
+                    empty.textContent = 'No ignore patterns';
+                    ignoreWrap.appendChild(empty);
+                } else {
+                    globs.forEach((glob) => {
+                        const tag = document.createElement('span');
+                        tag.className = 'tag';
+                        tag.textContent = glob + ' ';
+                        const btn = document.createElement('button');
+                        btn.textContent = '×';
+                        btn.dataset.action = 'removeIgnore';
+                        btn.dataset.glob = glob;
+                        tag.appendChild(btn);
+                        ignoreWrap.appendChild(tag);
+                    });
+                }
+            }
+
+            // Render file type toggles
+            const fileTypeWrap = document.getElementById('fileTypeToggles');
+            if (fileTypeWrap) {
+                fileTypeWrap.innerHTML = '';
+                const allTypes = ['.md', '.txt', '.rst', '.ts', '.tsx', '.js', '.jsx', '.py', '.rs'];
+                const enabled = Array.isArray(state.enabledFileTypes) ? state.enabledFileTypes : allTypes;
+                allTypes.forEach((ft) => {
+                    const label = document.createElement('label');
+                    const checkbox = document.createElement('input');
+                    checkbox.type = 'checkbox';
+                    checkbox.checked = enabled.includes(ft);
+                    checkbox.dataset.filetype = ft;
+                    label.appendChild(checkbox);
+                    label.appendChild(document.createTextNode(ft));
+                    fileTypeWrap.appendChild(label);
+                });
+            }
 
             const profileWrap = document.getElementById('profileOptions');
             if (profileWrap) {
@@ -998,16 +1243,16 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
         document.addEventListener('click', (event) => {
             const target = event.target;
             if (!(target instanceof HTMLElement)) {
-                return;
-            }
+        return;
+    }
             const actionEl = target.closest('[data-action]');
             if (!actionEl) {
                 return;
             }
             const action = actionEl.dataset.action;
             if (!action) {
-                return;
-            }
+        return;
+    }
 
             if (action === 'addIgnore') {
                 const input = document.getElementById('ignoreInput');
@@ -1016,6 +1261,12 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                     vscode.postMessage({ type: 'addIgnore', value });
                     input.value = '';
                 }
+                return;
+            }
+
+            if (action === 'removeIgnore') {
+                const glob = actionEl.dataset.glob || '';
+                vscode.postMessage({ type: 'removeIgnore', glob });
                 return;
             }
 
@@ -1035,6 +1286,30 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
             }
 
             vscode.postMessage({ type: action });
+        });
+
+        // Category toggle handlers
+        document.getElementById('categoryToggles')?.addEventListener('change', (event) => {
+            const input = event.target;
+            if (input instanceof HTMLInputElement && input.dataset.category) {
+                vscode.postMessage({
+                    type: 'toggleCategory',
+                    category: input.dataset.category,
+                    enabled: input.checked
+                });
+            }
+        });
+
+        // File type toggle handlers
+        document.getElementById('fileTypeToggles')?.addEventListener('change', (event) => {
+            const input = event.target;
+            if (input instanceof HTMLInputElement && input.dataset.filetype) {
+                vscode.postMessage({
+                    type: 'toggleFileType',
+                    fileType: input.dataset.filetype,
+                    enabled: input.checked
+                });
+            }
         });
 
         document.getElementById('strictToggle')?.addEventListener('change', (event) => {
@@ -1155,6 +1430,116 @@ function extractProfilesFromConfig(configPath: string): string[] {
         return profiles;
     } catch {
         return [];
+    }
+}
+
+// All known categories in ToneGuard
+const ALL_CATEGORIES = [
+    'buzzword', 'puffery', 'confidence', 'filler', 'transition',
+    'hedge', 'emoji', 'cliche', 'passive', 'uniformity', 'repetition'
+];
+
+// Common file types for ToneGuard
+const ALL_FILE_TYPES = ['.md', '.txt', '.rst', '.ts', '.tsx', '.js', '.jsx', '.py', '.rs'];
+
+function extractIgnoreGlobsFromConfig(configPath: string): string[] {
+    try {
+        const text = fs.readFileSync(configPath, 'utf8');
+        const lines = text.split(/\r?\n/);
+        const block = findTopLevelBlock(lines, 'repo_rules');
+        if (block.start === -1) {
+            return [];
+        }
+        
+        const globs: string[] = [];
+        let inIgnoreGlobs = false;
+        let ignoreIndent = 0;
+        
+        for (let i = block.start + 1; i < block.end; i += 1) {
+            const line = lines[i];
+            const trimmed = line.trim();
+            
+            if (/^\s*ignore_globs\s*:/.test(line)) {
+                inIgnoreGlobs = true;
+                ignoreIndent = line.match(/^\s*/)![0].length;
+                continue;
+            }
+            
+            if (inIgnoreGlobs) {
+                if (trimmed.length === 0 || trimmed.startsWith('#')) {
+                    continue;
+                }
+                const currentIndent = line.match(/^\s*/)![0].length;
+                if (currentIndent <= ignoreIndent && /^[A-Za-z0-9_-]+:/.test(trimmed)) {
+                    break;
+                }
+                if (trimmed.startsWith('-')) {
+                    let value = trimmed.replace(/^-+/, '').trim();
+                    value = value.replace(/^["']|["']$/g, '');
+                    if (value.length > 0) {
+                        globs.push(value);
+                    }
+                }
+            }
+        }
+        return globs;
+    } catch {
+        return [];
+    }
+}
+
+function extractDisabledCategoriesFromConfig(configPath: string): string[] {
+    try {
+        const text = fs.readFileSync(configPath, 'utf8');
+        const lines = text.split(/\r?\n/);
+        const block = findTopLevelBlock(lines, 'disabled_categories');
+        if (block.start === -1) {
+            return [];
+        }
+        
+        const disabled: string[] = [];
+        for (let i = block.start + 1; i < block.end; i += 1) {
+            const line = lines[i];
+            const trimmed = line.trim();
+            if (trimmed.startsWith('-')) {
+                let value = trimmed.replace(/^-+/, '').trim();
+                value = value.replace(/^["']|["']$/g, '');
+                if (value.length > 0) {
+                    disabled.push(value.toLowerCase());
+                }
+            }
+        }
+        return disabled;
+    } catch {
+        return [];
+    }
+}
+
+function extractEnabledFileTypesFromConfig(configPath: string): string[] {
+    try {
+        const text = fs.readFileSync(configPath, 'utf8');
+        const lines = text.split(/\r?\n/);
+        const block = findTopLevelBlock(lines, 'file_types');
+        if (block.start === -1) {
+            // Default to all if not specified
+            return ALL_FILE_TYPES;
+        }
+        
+        const types: string[] = [];
+        for (let i = block.start + 1; i < block.end; i += 1) {
+            const line = lines[i];
+            const trimmed = line.trim();
+            if (trimmed.startsWith('-')) {
+                let value = trimmed.replace(/^-+/, '').trim();
+                value = value.replace(/^["']|["']$/g, '');
+                if (value.length > 0) {
+                    types.push(value.startsWith('.') ? value : `.${value}`);
+                }
+            }
+        }
+        return types.length > 0 ? types : ALL_FILE_TYPES;
+    } catch {
+        return ALL_FILE_TYPES;
     }
 }
 
@@ -1349,6 +1734,271 @@ async function openConfigFile(
     void vscode.window.showErrorMessage('ToneGuard: config file not found.');
 }
 
+async function toggleCategoryInConfig(
+    context: vscode.ExtensionContext,
+    configPath: string,
+    category: string,
+    enabled: boolean,
+    outputChannel: vscode.OutputChannel
+): Promise<boolean> {
+    const resolved = await ensureWorkspaceConfig(context, configPath);
+    if (!resolved) {
+        return false;
+    }
+
+    try {
+        const text = fs.readFileSync(resolved, 'utf8');
+        const lines = text.split(/\r?\n/);
+        const block = findTopLevelBlock(lines, 'disabled_categories');
+        const normalizedCat = category.toLowerCase().trim();
+
+        if (enabled) {
+            // Remove from disabled_categories
+            if (block.start === -1) {
+                return true; // Not disabled, nothing to do
+            }
+            const newLines = lines.filter((line, idx) => {
+                if (idx <= block.start || idx >= block.end) return true;
+                const trimmed = line.trim();
+                if (trimmed.startsWith('-')) {
+                    const val = trimmed.replace(/^-+/, '').trim().replace(/^["']|["']$/g, '').toLowerCase();
+                    return val !== normalizedCat;
+                }
+                return true;
+            });
+            fs.writeFileSync(resolved, newLines.join('\n'), 'utf8');
+        } else {
+            // Add to disabled_categories
+            if (block.start === -1) {
+                // Create disabled_categories section
+                lines.push('');
+                lines.push('disabled_categories:');
+                lines.push(`  - ${JSON.stringify(normalizedCat)}`);
+            } else {
+                // Check if already present
+                for (let i = block.start + 1; i < block.end; i++) {
+                    const trimmed = lines[i].trim();
+                    if (trimmed.startsWith('-')) {
+                        const val = trimmed.replace(/^-+/, '').trim().replace(/^["']|["']$/g, '').toLowerCase();
+                        if (val === normalizedCat) {
+                            return true; // Already disabled
+                        }
+                    }
+                }
+                // Add to section
+                lines.splice(block.start + 1, 0, `  - ${JSON.stringify(normalizedCat)}`);
+            }
+            fs.writeFileSync(resolved, lines.join('\n'), 'utf8');
+        }
+        return true;
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        outputChannel.appendLine(`ToneGuard: failed to update config: ${message}`);
+        return false;
+    }
+}
+
+async function removeIgnoreGlobFromConfig(
+    context: vscode.ExtensionContext,
+    configPath: string,
+    glob: string,
+    outputChannel: vscode.OutputChannel
+): Promise<boolean> {
+    const resolved = await ensureWorkspaceConfig(context, configPath);
+    if (!resolved) {
+        return false;
+    }
+
+    try {
+        const text = fs.readFileSync(resolved, 'utf8');
+        const lines = text.split(/\r?\n/);
+        const block = findTopLevelBlock(lines, 'repo_rules');
+        if (block.start === -1) {
+            return true;
+        }
+
+        const normalizedGlob = glob.trim().replace(/^["']|["']$/g, '');
+        let inIgnoreGlobs = false;
+        let ignoreIndent = 0;
+
+        const newLines = lines.filter((line, idx) => {
+            if (idx < block.start || idx >= block.end) return true;
+            
+            if (/^\s*ignore_globs\s*:/.test(line)) {
+                inIgnoreGlobs = true;
+                ignoreIndent = line.match(/^\s*/)![0].length;
+                return true;
+            }
+            
+            if (inIgnoreGlobs) {
+                const trimmed = line.trim();
+                const currentIndent = line.match(/^\s*/)![0].length;
+                if (currentIndent <= ignoreIndent && /^[A-Za-z0-9_-]+:/.test(trimmed)) {
+                    inIgnoreGlobs = false;
+                    return true;
+                }
+                if (trimmed.startsWith('-')) {
+                    const val = trimmed.replace(/^-+/, '').trim().replace(/^["']|["']$/g, '');
+                    if (val === normalizedGlob) {
+                        return false; // Remove this line
+                    }
+                }
+            }
+            return true;
+        });
+
+        fs.writeFileSync(resolved, newLines.join('\n'), 'utf8');
+        void vscode.window.showInformationMessage(`ToneGuard: removed ignore glob "${glob}"`);
+        return true;
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        outputChannel.appendLine(`ToneGuard: failed to update config: ${message}`);
+        return false;
+    }
+}
+
+async function toggleFileTypeInConfig(
+    context: vscode.ExtensionContext,
+    configPath: string,
+    fileType: string,
+    enabled: boolean,
+    outputChannel: vscode.OutputChannel
+): Promise<boolean> {
+    const resolved = await ensureWorkspaceConfig(context, configPath);
+    if (!resolved) {
+        return false;
+    }
+
+    try {
+        const text = fs.readFileSync(resolved, 'utf8');
+        const lines = text.split(/\r?\n/);
+        const block = findTopLevelBlock(lines, 'file_types');
+        const normalizedType = fileType.startsWith('.') ? fileType : `.${fileType}`;
+
+        if (block.start === -1) {
+            // Create file_types section with all types except the disabled one (if disabling)
+            const types = enabled 
+                ? [...ALL_FILE_TYPES]
+                : ALL_FILE_TYPES.filter(t => t !== normalizedType);
+            lines.push('');
+            lines.push('file_types:');
+            for (const t of types) {
+                lines.push(`  - ${JSON.stringify(t)}`);
+            }
+            fs.writeFileSync(resolved, lines.join('\n'), 'utf8');
+            return true;
+        }
+
+        if (enabled) {
+            // Add to file_types if not present
+            let found = false;
+            for (let i = block.start + 1; i < block.end; i++) {
+                const trimmed = lines[i].trim();
+                if (trimmed.startsWith('-')) {
+                    let val = trimmed.replace(/^-+/, '').trim().replace(/^["']|["']$/g, '');
+                    val = val.startsWith('.') ? val : `.${val}`;
+                    if (val === normalizedType) {
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if (!found) {
+                lines.splice(block.start + 1, 0, `  - ${JSON.stringify(normalizedType)}`);
+                fs.writeFileSync(resolved, lines.join('\n'), 'utf8');
+            }
+        } else {
+            // Remove from file_types
+            const newLines = lines.filter((line, idx) => {
+                if (idx <= block.start || idx >= block.end) return true;
+                const trimmed = line.trim();
+                if (trimmed.startsWith('-')) {
+                    let val = trimmed.replace(/^-+/, '').trim().replace(/^["']|["']$/g, '');
+                    val = val.startsWith('.') ? val : `.${val}`;
+                    return val !== normalizedType;
+                }
+                return true;
+            });
+            fs.writeFileSync(resolved, newLines.join('\n'), 'utf8');
+        }
+        return true;
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        outputChannel.appendLine(`ToneGuard: failed to update config: ${message}`);
+        return false;
+    }
+}
+
+/**
+ * Generates a fix prompt for AI agents from findings.
+ */
+function generateFixPrompt(findings: any[]): string {
+    const parts: string[] = [
+        '# ToneGuard: Fix These Issues\n',
+        'Please fix the following issues found by ToneGuard:\n'
+    ];
+    
+    for (const finding of findings) {
+        const file = finding.path || finding.file || '<unknown>';
+        const line = finding.line || '?';
+        const message = finding.message || 'Issue found';
+        const fix = finding.fix_instructions;
+        
+        parts.push(`\n## ${file}:${line}\n`);
+        parts.push(`**Issue**: ${message}\n`);
+        
+        if (fix) {
+            if (typeof fix === 'object') {
+                parts.push(`**Action**: ${fix.action || 'fix'}\n`);
+                if (fix.description) parts.push(`**How**: ${fix.description}\n`);
+                if (fix.find_pattern) parts.push(`**Find**: \`${fix.find_pattern}\`\n`);
+                if (fix.replace_pattern) parts.push(`**Replace**: \`${fix.replace_pattern}\`\n`);
+                if (fix.alternative) parts.push(`**Alternative**: ${fix.alternative}\n`);
+            } else {
+                parts.push(`**Fix**: ${fix}\n`);
+            }
+        }
+    }
+    
+    parts.push('\n---\nApply these fixes to the codebase.\n');
+    return parts.join('');
+}
+
+/**
+ * Fix findings using an AI agent (Cursor Composer, Claude, or Codex).
+ */
+async function fixWithAI(
+    context: vscode.ExtensionContext,
+    findings: any[],
+    env: AIEnvironment,
+    outputChannel: vscode.OutputChannel
+): Promise<void> {
+    const prompt = generateFixPrompt(findings);
+    
+    // Copy to clipboard
+    await vscode.env.clipboard.writeText(prompt);
+    outputChannel.appendLine(`ToneGuard: Copied ${findings.length} fix instructions to clipboard`);
+    
+    if (env === 'cursor') {
+        // Try to open Cursor Composer
+        try {
+            await vscode.commands.executeCommand('cursor.composer.new');
+        void vscode.window.showInformationMessage(
+                `ToneGuard: ${findings.length} fix instructions copied. Paste in Composer to apply.`
+            );
+        } catch {
+            void vscode.window.showInformationMessage(
+                `ToneGuard: ${findings.length} fix instructions copied to clipboard. Open Composer (Cmd+I) and paste.`
+            );
+        }
+    } else {
+        // For Claude/Codex, just inform user
+        void vscode.window.showInformationMessage(
+            `ToneGuard: ${findings.length} fix instructions copied. Paste in ${getEnvDisplayName(env)} to apply.`
+        );
+    }
+}
+
 /**
  * Resolves the server command to use.
  * Priority:
@@ -1419,28 +2069,40 @@ function getCliCommand(context: vscode.ExtensionContext, userCommand: string): s
 }
 
 /**
- * Detects if the workspace has Claude Code or Codex AI environment markers.
+ * Detects all AI environments: Cursor IDE, Claude Code, and Codex.
+ * - Cursor: Detected by checking if running in Cursor IDE
+ * - Claude Code: Detected by .claude directory in workspace
+ * - Codex: Detected by .codex directory in workspace
  */
-async function detectAIEnvironment(): Promise<AIEnvironment> {
+function detectAIEnvironments(): DetectedEnvironments {
+    const isCursor = vscode.env.appName.toLowerCase().includes('cursor');
+    
     const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (!workspaceFolders || workspaceFolders.length === 0) {
-        return null;
+    let hasClaude = false;
+    let hasCodex = false;
+    
+    if (workspaceFolders && workspaceFolders.length > 0) {
+        const workspaceRoot = workspaceFolders[0].uri.fsPath;
+        hasClaude = fs.existsSync(path.join(workspaceRoot, '.claude'));
+        hasCodex = fs.existsSync(path.join(workspaceRoot, '.codex'));
     }
 
-    const workspaceRoot = workspaceFolders[0].uri.fsPath;
+    return {
+        cursor: isCursor,
+        claude: hasClaude,
+        codex: hasCodex,
+    };
+}
 
-    // Check for Claude Code markers (.claude directory)
-    const claudeDir = path.join(workspaceRoot, '.claude');
-    if (fs.existsSync(claudeDir)) {
-        return 'claude';
-    }
-
-    // Check for Codex markers (.codex directory)
-    const codexDir = path.join(workspaceRoot, '.codex');
-    if (fs.existsSync(codexDir)) {
-        return 'codex';
-    }
-
+/**
+ * Legacy function for backward compatibility.
+ * Returns the first detected AI environment or null.
+ */
+async function detectAIEnvironment(): Promise<AIEnvironment | null> {
+    const envs = detectAIEnvironments();
+    if (envs.claude) return 'claude';
+    if (envs.codex) return 'codex';
+    if (envs.cursor) return 'cursor';
     return null;
 }
 
@@ -1448,16 +2110,23 @@ async function detectAIEnvironment(): Promise<AIEnvironment> {
  * Gets the global skill directory for the given AI environment.
  * Skills are installed globally so they apply across all projects.
  */
-function getGlobalSkillDir(env: 'claude' | 'codex', kind: SkillKind): string {
+function getGlobalSkillDir(env: AIEnvironment, kind: SkillKind): string {
     const homeDir = os.homedir();
-    const baseDir = env === 'claude' ? '.claude' : '.codex';
+    let baseDir: string;
+    if (env === 'cursor') {
+        baseDir = '.cursor';
+    } else if (env === 'claude') {
+        baseDir = '.claude';
+    } else {
+        baseDir = '.codex';
+    }
     return path.join(homeDir, baseDir, 'skills', SKILL_META[kind].dirName);
 }
 
 /**
  * Checks if the ToneGuard skill is already installed globally for the given environment.
  */
-function isSkillInstalled(env: 'claude' | 'codex', kind: SkillKind): boolean {
+function isSkillInstalled(env: AIEnvironment, kind: SkillKind): boolean {
     const skillDir = getGlobalSkillDir(env, kind);
     return fs.existsSync(path.join(skillDir, 'SKILL.md'));
 }
@@ -1481,13 +2150,22 @@ function getSkillTemplate(
 }
 
 /**
+ * Gets human-readable name for an AI environment.
+ */
+function getEnvDisplayName(env: AIEnvironment): string {
+    if (env === 'cursor') return 'Cursor';
+    if (env === 'claude') return 'Claude Code';
+    return 'Codex';
+}
+
+/**
  * Installs the ToneGuard skill globally for the specified AI environment.
- * Skills are installed in ~/.claude/skills/ or ~/.codex/skills/ so they
- * apply across all projects.
+ * Skills are installed in ~/.cursor/skills/, ~/.claude/skills/, or ~/.codex/skills/
+ * so they apply across all projects.
  */
 async function installSkill(
     context: vscode.ExtensionContext, 
-    env: 'claude' | 'codex',
+    env: AIEnvironment,
     outputChannel: vscode.OutputChannel,
     kind: SkillKind
 ): Promise<boolean> {
@@ -1500,7 +2178,7 @@ async function installSkill(
         return false;
     }
 
-    // Install to global directory (~/.claude/skills/ or ~/.codex/skills/)
+    // Install to global directory
     const skillDir = getGlobalSkillDir(env, kind);
     const skillFile = path.join(skillDir, 'SKILL.md');
 
@@ -1514,7 +2192,7 @@ async function installSkill(
         outputChannel.appendLine(`ToneGuard: Installed ${SKILL_META[kind].label} to ${skillFile}`);
         
         void vscode.window.showInformationMessage(
-            `${SKILL_META[kind].label} installed for ${env === 'claude' ? 'Claude Code' : 'Codex'}! ` +
+            `${SKILL_META[kind].label} installed for ${getEnvDisplayName(env)}! ` +
             SKILL_META[kind].success,
             'View Skill'
         ).then((selection) => {
@@ -1537,11 +2215,11 @@ async function installSkill(
 }
 
 /**
- * Prompts the user to install the ToneGuard skill if an AI environment is detected.
+ * Prompts the user to install ToneGuard skills for detected AI environments.
+ * Checks Cursor, Claude Code, and Codex, and prompts for any missing skills.
  */
-async function promptSkillInstallation(
+async function promptSkillInstallationForAll(
     context: vscode.ExtensionContext,
-    env: 'claude' | 'codex',
     outputChannel: vscode.OutputChannel
 ): Promise<void> {
     // Check if user has dismissed this prompt before
@@ -1550,21 +2228,52 @@ async function promptSkillInstallation(
         return;
     }
 
-    // Check if skill is already installed
-    if (isSkillInstalled(env, 'writing')) {
+    const envs = detectAIEnvironments();
+    const missingEnvs: AIEnvironment[] = [];
+
+    // Check which detected environments are missing skills
+    if (envs.cursor && !isSkillInstalled('cursor', 'writing')) {
+        missingEnvs.push('cursor');
+    }
+    if (envs.claude && !isSkillInstalled('claude', 'writing')) {
+        missingEnvs.push('claude');
+    }
+    if (envs.codex && !isSkillInstalled('codex', 'writing')) {
+        missingEnvs.push('codex');
+    }
+
+    if (missingEnvs.length === 0) {
         return;
     }
 
-    const envName = env === 'claude' ? 'Claude Code' : 'Codex';
+    const envNames = missingEnvs.map(getEnvDisplayName).join(', ');
     const action = await vscode.window.showInformationMessage(
-        `ToneGuard detected ${envName}. Install skill to prevent AI slop at the source?`,
-        'Install',
+        `ToneGuard detected: ${envNames}. Install skills to prevent AI slop?`,
+        'Install All',
+        'Choose...',
         'Not Now',
         'Never Ask'
     );
 
-    if (action === 'Install') {
-        await installSkill(context, env, outputChannel, 'writing');
+    if (action === 'Install All') {
+        for (const env of missingEnvs) {
+            await installSkill(context, env, outputChannel, 'writing');
+        }
+    } else if (action === 'Choose...') {
+        const choices = missingEnvs.map(env => ({
+            label: getEnvDisplayName(env),
+            value: env,
+            picked: true
+        }));
+        const selected = await vscode.window.showQuickPick(choices, {
+            canPickMany: true,
+            placeHolder: 'Select environments to install skills for'
+        });
+        if (selected) {
+            for (const choice of selected) {
+                await installSkill(context, choice.value, outputChannel, 'writing');
+            }
+        }
     } else if (action === 'Never Ask') {
         await context.globalState.update(SKILL_PROMPT_DISMISSED_KEY, true);
         outputChannel.appendLine('ToneGuard: Skill installation prompt dismissed permanently.');
@@ -1840,7 +2549,7 @@ export function activate(context: vscode.ExtensionContext): void {
             );
 
             function runCli(args: string[], title: string): Promise<void> {
-                return new Promise((resolve, reject) => {
+    return new Promise((resolve, reject) => {
                     outputChannel.show(true);
                     outputChannel.appendLine(`ToneGuard: ${title}`);
                     outputChannel.appendLine(`ToneGuard: ${cliCommand} ${args.join(' ')}`);
@@ -1904,22 +2613,69 @@ export function activate(context: vscode.ExtensionContext): void {
                 );
 
                 refreshAll();
-                void vscode.window
-                    .showInformationMessage(
-                        'ToneGuard: Recommended review complete.',
-                        'Open Proposal'
-                    )
-                    .then((selection) => {
-                        if (selection === 'Open Proposal') {
-                            void vscode.workspace
-                                .openTextDocument(proposalPath)
-                                .then((doc) => {
-                                    void vscode.window.showTextDocument(doc, {
-                                        preview: false,
-                                    });
-                                });
-                        }
-                    });
+                
+                // Read audit results to get finding count
+                let findingCount = 0;
+                let findings: any[] = [];
+                try {
+                    const auditText = fs.readFileSync(auditPath, 'utf8');
+                    const auditData = JSON.parse(auditText);
+                    findings = Array.isArray(auditData?.audit?.findings) ? auditData.audit.findings : [];
+                    findingCount = findings.length;
+                } catch {
+                    // Ignore parse errors
+                }
+
+                if (findingCount === 0) {
+                    void vscode.window.showInformationMessage(
+                        'ToneGuard: All clear! No issues found. 🎉'
+                    );
+                    return;
+                }
+
+                // Build fix options based on detected environments
+                const envs = detectAIEnvironments();
+                const fixOptions: string[] = [];
+                if (envs.cursor) fixOptions.push('Fix with Cursor');
+                if (envs.claude) fixOptions.push('Fix with Claude');
+                if (envs.codex) fixOptions.push('Fix with Codex');
+                fixOptions.push('Review Proposal');
+
+                const choice = await vscode.window.showWarningMessage(
+                    `ToneGuard: ${findingCount} issue(s) found`,
+                    ...fixOptions,
+                    'Dismiss'
+                );
+
+                if (choice === 'Fix with Cursor') {
+                    const prompt = generateFixPrompt(findings);
+                    await vscode.env.clipboard.writeText(prompt);
+                    try {
+                        await vscode.commands.executeCommand('cursor.composer.new');
+                        void vscode.window.showInformationMessage(
+                            'ToneGuard: Fix instructions copied. Paste in Composer to apply.'
+                        );
+                    } catch {
+                        void vscode.window.showInformationMessage(
+                            'ToneGuard: Fix instructions copied. Open Composer (Cmd+I) and paste.'
+                        );
+                    }
+                } else if (choice === 'Fix with Claude') {
+                    const prompt = generateFixPrompt(findings);
+                    await vscode.env.clipboard.writeText(prompt);
+                    void vscode.window.showInformationMessage(
+                        'ToneGuard: Fix instructions copied. Paste in Claude Code to apply.'
+                    );
+                } else if (choice === 'Fix with Codex') {
+                    const prompt = generateFixPrompt(findings);
+                    await vscode.env.clipboard.writeText(prompt);
+                    void vscode.window.showInformationMessage(
+                        'ToneGuard: Fix instructions copied. Paste in Codex to apply.'
+                    );
+                } else if (choice === 'Review Proposal') {
+                    const doc = await vscode.workspace.openTextDocument(proposalPath);
+                    await vscode.window.showTextDocument(doc, { preview: false });
+                }
             } catch (error) {
                 const err = error as NodeJS.ErrnoException;
                 const message = err.message || String(err);
@@ -2256,12 +3012,17 @@ export function activate(context: vscode.ExtensionContext): void {
         })
     );
 
-    // Auto-detect AI environment and prompt for skill installation
+    // Auto-detect AI environments and prompt for skill installation
     void (async () => {
-        const env = await detectAIEnvironment();
-        if (env) {
-            outputChannel.appendLine(`ToneGuard: Detected ${env === 'claude' ? 'Claude Code' : 'Codex'} environment`);
-            await promptSkillInstallation(context, env, outputChannel);
+        const envs = detectAIEnvironments();
+        const detected: string[] = [];
+        if (envs.cursor) detected.push('Cursor');
+        if (envs.claude) detected.push('Claude Code');
+        if (envs.codex) detected.push('Codex');
+        
+        if (detected.length > 0) {
+            outputChannel.appendLine(`ToneGuard: Detected AI environments: ${detected.join(', ')}`);
+            await promptSkillInstallationForAll(context, outputChannel);
         }
     })();
 }
