@@ -61,6 +61,10 @@ Common invocations you can drop into any repository:
   `dwg-cli comments src/ --config layth-style.yml`
 - Comment hygiene mode (strip eligible comments):\
   `dwg-cli comments src/ --config layth-style.yml --strip`
+- Flow spec validation (guardrail contracts):\
+  `dwg-cli flow check --config layth-style.yml`
+- Flow audit (entropy detectors + flow checks):\
+  `dwg-cli flow audit --config layth-style.yml --out reports/flow-audit.json .`
 
 ## Dependencies
 Install the following tools before building. They match the workspace's tested toolchain:
@@ -150,12 +154,28 @@ dwg comments --strip
 
 Tune ratios and allow lists through `comment_policy` before running destructive operations.
 
+## Flow guardrails
+ToneGuard can enforce logic flow guardrails across codebases:
+
+- Define flow specs in `flows/*.md` (YAML frontmatter + narrative body).
+- Validate flow specs: `dwg-cli flow check`
+- Audit code for pass-through wrappers, lonely abstractions, and placeholders:
+  `dwg-cli flow audit --out reports/flow-audit.json .`
+
+See `flows/` in this repo for templates.
+
+## Local one-click install
+Build and bundle the CLI + LSP + VSIX for the current platform:
+
+```bash
+./scripts/install-local.sh
+```
+
 ## License
 ToneGuard is licensed under the MIT License. See `LICENSE` for full terms. The MIT terms allow commercial and open-source redistribution so long as you include the original copyright and license text.
 
 ## Contributing
 Open an issue or submit a pull request with a focused change set. Run the linters and tests before sending patches.
-
 
 
 

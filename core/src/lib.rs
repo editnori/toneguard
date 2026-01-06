@@ -13,6 +13,9 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+pub mod arch;
+pub mod flow;
+
 /// Heading capitalisation policy.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -383,6 +386,7 @@ pub struct Config {
     pub profiles: Vec<ProfileConfig>,
     pub repo_rules: RepoRules,
     pub comment_policy: CommentPolicy,
+    pub flow_rules: flow::FlowRules,
 }
 
 impl Default for Config {
@@ -615,6 +619,7 @@ impl Default for Config {
             profiles: Vec::new(),
             repo_rules: RepoRules::default(),
             comment_policy: CommentPolicy::default(),
+            flow_rules: flow::FlowRules::default(),
         }
     }
 }

@@ -53,6 +53,7 @@ whitelist:
 | Setting | Description |
 |---------|-------------|
 | `dwg.configPath` | Path to custom config (defaults to workspace `layth-style.yml`) |
+| `dwg.cliCommand` | Path to ToneGuard CLI (`dwg`) for flow audits |
 | `dwg.profile` | Force a specific profile for all files |
 | `dwg.disableCategories` | Hide specific diagnostic categories |
 | `dwg.enableCategories` | Show additional categories |
@@ -60,7 +61,9 @@ whitelist:
 ## Commands
 
 - **ToneGuard: Lint Workspace** — Refresh diagnostics for all open files
+- **ToneGuard: Flow Audit Workspace** — Run flow audit detectors and write a report
 - **ToneGuard: Show Server Info** — Display active server and config paths
+- **ToneGuard: Install Logic Flow Guardrails Skill** — Install the flow guardrail prompt
 
 ## Ignoring False Positives
 

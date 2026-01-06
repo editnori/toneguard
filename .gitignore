@@ -5,4 +5,5 @@ vscode-extension/out
 vscode-extension/node_modules
 *.vsix
 vscode-extension/bin/*/dwg-lsp*
+vscode-extension/bin/*/dwg*
 vscode-extension/*.vsix

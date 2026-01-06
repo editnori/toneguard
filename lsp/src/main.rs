@@ -137,12 +137,12 @@ impl Backend {
     /// Check if a file path should be ignored (AI agent files, skills, etc.)
     fn should_ignore_path(uri: &Url) -> bool {
         let path = uri.path().to_lowercase();
-        
+
         // Skip AI agent skill files
         if path.contains("/.claude/") || path.contains("/.codex/") {
             return true;
         }
-        
+
         // Skip common agent/skill filenames
         let filename = path.rsplit('/').next().unwrap_or("");
         matches!(filename, "skill.md" | "agent.md" | "claude.md" | "codex.md")

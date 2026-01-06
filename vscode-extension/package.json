@@ -2,7 +2,7 @@
   "name": "toneguard",
   "displayName": "ToneGuard",
   "description": "Zero-setup AI slop detection for Markdown. Highlights generic, AI-style writing patterns instantly.",
-  "version": "0.1.45",
+  "version": "0.1.46",
   "publisher": "editnori",
   "icon": "icon.png",
   "engines": {
@@ -24,7 +24,9 @@
     "onStartupFinished",
     "onLanguage:markdown",
     "onCommand:dwg.lintWorkspace",
+    "onCommand:dwg.flowAudit",
     "onCommand:dwg.installSkill",
+    "onCommand:dwg.installLogicFlowSkill",
     "onCommand:dwg.installSkillClaude",
     "onCommand:dwg.installSkillCodex"
   ],
@@ -41,6 +43,11 @@
         "category": "ToneGuard"
       },
       {
+        "command": "dwg.flowAudit",
+        "title": "ToneGuard: Flow Audit Workspace",
+        "category": "ToneGuard"
+      },
+      {
         "command": "dwg.showInfo",
         "title": "ToneGuard: Show Server Info",
         "category": "ToneGuard"
@@ -48,6 +55,11 @@
       {
         "command": "dwg.installSkill",
         "title": "ToneGuard: Install AI Skill",
+        "category": "ToneGuard"
+      },
+      {
+        "command": "dwg.installLogicFlowSkill",
+        "title": "ToneGuard: Install Logic Flow Guardrails Skill",
         "category": "ToneGuard"
       },
       {
@@ -68,6 +80,11 @@
           "type": "string",
           "default": "",
           "markdownDescription": "Path to the ToneGuard language server. Leave empty to use bundled binary (recommended). Set to `dwg-lsp` to use a manually installed version from PATH."
+        },
+        "dwg.cliCommand": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to the ToneGuard CLI (`dwg`). Leave empty to use bundled binary (recommended). Set to `dwg` to use a manually installed version from PATH."
         },
         "dwg.configPath": {
           "type": "string",

@@ -7,9 +7,13 @@ use std::{
 };
 
 use anyhow::{anyhow, Context};
-use clap::{ArgAction, Parser};
+use clap::{ArgAction, Parser, Subcommand};
 use console::style;
-use dwg_core::{Analyzer, Category, CommentPolicy, Config, DocumentReport};
+use dwg_core::{
+    arch::{FlowAuditConfig, FlowAuditReport, Language as FlowLanguage},
+    flow::{FlowSpecIssue, IssueSeverity},
+    Analyzer, Category, CommentPolicy, Config, DocumentReport,
+};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use regex::Regex;
 use serde::Serialize;
@@ -123,6 +127,74 @@ struct CalibrateArgs {
     paths: Vec<PathBuf>,
 }
 
+#[derive(Debug, Parser)]
+#[command(
+    name = "dwg flow",
+    about = "Logic flow guardrails: validate flow specs and audit code entropy."
+)]
+struct FlowArgs {
+    #[command(subcommand)]
+    command: FlowCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum FlowCommand {
+    /// Validate flow specs and invariants.
+    Check(FlowCheckArgs),
+    /// Run static entropy detectors and optional flow checks.
+    Audit(FlowAuditArgs),
+}
+
+#[derive(Debug, Parser)]
+struct FlowCheckArgs {
+    /// Path to config file (YAML).
+    #[arg(long, default_value = "layth-style.yml")]
+    config: PathBuf,
+
+    /// Directory containing flow specs.
+    #[arg(long, default_value = "flows")]
+    flows: PathBuf,
+
+    /// Emit JSON output for automation.
+    #[arg(long, action = ArgAction::SetTrue)]
+    json: bool,
+
+    /// Write JSON output to file.
+    #[arg(long)]
+    out: Option<PathBuf>,
+}
+
+#[derive(Debug, Parser)]
+struct FlowAuditArgs {
+    /// Path to config file (YAML).
+    #[arg(long, default_value = "layth-style.yml")]
+    config: PathBuf,
+
+    /// Directory containing flow specs.
+    #[arg(long, default_value = "flows")]
+    flows: PathBuf,
+
+    /// Skip flow spec validation.
+    #[arg(long, action = ArgAction::SetTrue)]
+    no_flow_checks: bool,
+
+    /// Restrict to specific languages (comma-separated: rust,typescript,javascript,python).
+    #[arg(long, value_delimiter = ',', value_name = "LANG[,LANG]")]
+    language: Vec<String>,
+
+    /// Emit JSON output for automation.
+    #[arg(long, action = ArgAction::SetTrue)]
+    json: bool,
+
+    /// Write JSON output to file.
+    #[arg(long)]
+    out: Option<PathBuf>,
+
+    /// Paths to scan (defaults to current directory).
+    #[arg(value_name = "PATH", num_args = 0..)]
+    paths: Vec<PathBuf>,
+}
+
 #[derive(Debug, Serialize)]
 struct FileResult {
     path: String,
@@ -149,6 +221,25 @@ struct OutputReport {
     repo_issues: Vec<RepoIssue>,
 }
 
+#[derive(Debug, Serialize)]
+struct FlowCheckFile {
+    path: String,
+    issues: Vec<FlowSpecIssue>,
+}
+
+#[derive(Debug, Serialize)]
+struct FlowCheckReport {
+    files: Vec<FlowCheckFile>,
+    error_count: usize,
+    warning_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct FlowAuditOutput {
+    flow_check: Option<FlowCheckReport>,
+    audit: FlowAuditReport,
+}
+
 fn main() -> anyhow::Result<()> {
     let argv: Vec<OsString> = env::args_os().collect();
 
@@ -169,6 +260,14 @@ fn main() -> anyhow::Result<()> {
             forwarded.extend_from_slice(&argv[2..]);
             let calibrate_args = CalibrateArgs::parse_from(forwarded);
             run_calibrate(calibrate_args)?;
+            return Ok(());
+        }
+        if subcommand == OsStr::new("flow") {
+            let mut forwarded = Vec::with_capacity(argv.len() - 1);
+            forwarded.push(argv[0].clone());
+            forwarded.extend_from_slice(&argv[2..]);
+            let flow_args = FlowArgs::parse_from(forwarded);
+            run_flow(flow_args)?;
             return Ok(());
         }
     }
@@ -1130,6 +1229,330 @@ struct SuggestedScores {
 struct WhitelistCandidate {
     phrase: String,
     count: usize,
+}
+
+fn run_flow(args: FlowArgs) -> anyhow::Result<()> {
+    match args.command {
+        FlowCommand::Check(check_args) => run_flow_check(check_args),
+        FlowCommand::Audit(audit_args) => run_flow_audit(audit_args),
+    }
+}
+
+fn run_flow_check(args: FlowCheckArgs) -> anyhow::Result<()> {
+    let (cfg, config_root) = load_config(&args.config)?;
+    let flows_dir = resolve_flows_dir(&config_root, &args.flows);
+    let report = flow_check_report(&cfg, &flows_dir)?;
+
+    if args.json {
+        let payload = serde_json::to_string_pretty(&report)?;
+        println!("{payload}");
+    } else {
+        print_flow_check_report(&report);
+    }
+
+    if let Some(out) = &args.out {
+        write_json(out, &report)?;
+    }
+
+    if report.error_count > 0 {
+        std::process::exit(2);
+    }
+
+    Ok(())
+}
+
+fn run_flow_audit(args: FlowAuditArgs) -> anyhow::Result<()> {
+    let (cfg, config_root) = load_config(&args.config)?;
+    let flows_dir = resolve_flows_dir(&config_root, &args.flows);
+    let flow_check = if args.no_flow_checks {
+        None
+    } else {
+        Some(flow_check_report(&cfg, &flows_dir)?)
+    };
+
+    let mut ignore_globs = cfg.repo_rules.ignore_globs.clone();
+    ignore_globs.extend(cfg.flow_rules.ignore_globs.clone());
+
+    let mut audit_config = FlowAuditConfig::default();
+    audit_config.ignore_globs = ignore_globs;
+    audit_config.base_dir = Some(config_root.clone());
+    if !args.language.is_empty() {
+        audit_config.languages = parse_languages(&args.language)?;
+    }
+
+    let scan_paths = if args.paths.is_empty() {
+        vec![config_root.clone()]
+    } else {
+        args.paths.clone()
+    };
+
+    let audit = dwg_core::arch::audit_paths(&scan_paths, &audit_config)?;
+    let output = FlowAuditOutput { flow_check, audit };
+
+    if args.json {
+        let payload = serde_json::to_string_pretty(&output)?;
+        println!("{payload}");
+    } else {
+        print_flow_audit_report(&output);
+    }
+
+    if let Some(out) = &args.out {
+        write_json(out, &output)?;
+    }
+
+    let flow_errors = output
+        .flow_check
+        .as_ref()
+        .map(|r| r.error_count)
+        .unwrap_or(0);
+    let audit_errors = output
+        .audit
+        .findings
+        .iter()
+        .filter(|f| matches!(f.severity, dwg_core::arch::FindingSeverity::Error))
+        .count();
+
+    if flow_errors > 0 || audit_errors > 0 {
+        std::process::exit(2);
+    }
+
+    Ok(())
+}
+
+fn resolve_flows_dir(config_root: &Path, flows: &Path) -> PathBuf {
+    if flows.is_absolute() {
+        flows.to_path_buf()
+    } else {
+        config_root.join(flows)
+    }
+}
+
+fn flow_check_report(cfg: &Config, flows_dir: &Path) -> anyhow::Result<FlowCheckReport> {
+    let mut ignore_globs = cfg.repo_rules.ignore_globs.clone();
+    ignore_globs.extend(cfg.flow_rules.ignore_globs.clone());
+    let ignore_set = build_ignore_set(&ignore_globs)?;
+
+    let flow_files = collect_flow_files(flows_dir, ignore_set.as_ref())?;
+    let mut files = Vec::new();
+    let mut error_count = 0;
+    let mut warning_count = 0;
+
+    if flow_files.is_empty() {
+        let issue = FlowSpecIssue {
+            severity: IssueSeverity::Error,
+            field: None,
+            message: format!("No flow specs found in {}", flows_dir.display()),
+        };
+        error_count += 1;
+        files.push(FlowCheckFile {
+            path: flows_dir.to_string_lossy().replace('\\', "/"),
+            issues: vec![issue],
+        });
+        return Ok(FlowCheckReport {
+            files,
+            error_count,
+            warning_count,
+        });
+    }
+
+    for path in flow_files {
+        let text = fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read {}", path.display()))?;
+        match dwg_core::flow::parse_flow_spec(&path, &text) {
+            Ok(doc) => {
+                let issues = doc.spec.validate(&cfg.flow_rules);
+                for issue in &issues {
+                    match issue.severity {
+                        IssueSeverity::Error => error_count += 1,
+                        IssueSeverity::Warning => warning_count += 1,
+                    }
+                }
+                files.push(FlowCheckFile {
+                    path: path.to_string_lossy().replace('\\', "/"),
+                    issues,
+                });
+            }
+            Err(err) => {
+                error_count += 1;
+                files.push(FlowCheckFile {
+                    path: path.to_string_lossy().replace('\\', "/"),
+                    issues: vec![FlowSpecIssue {
+                        severity: IssueSeverity::Error,
+                        field: None,
+                        message: err.to_string(),
+                    }],
+                });
+            }
+        }
+    }
+
+    Ok(FlowCheckReport {
+        files,
+        error_count,
+        warning_count,
+    })
+}
+
+fn collect_flow_files(flows_dir: &Path, ignore: Option<&GlobSet>) -> anyhow::Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    if flows_dir.is_dir() {
+        let mut walker = WalkDir::new(flows_dir).into_iter();
+        while let Some(entry_res) = walker.next() {
+            let entry = entry_res?;
+            let path = entry.path();
+            if let Some(set) = ignore {
+                if set.is_match(path) {
+                    if entry.file_type().is_dir() {
+                        walker.skip_current_dir();
+                    }
+                    continue;
+                }
+            }
+            if entry.file_type().is_dir() {
+                continue;
+            }
+            if is_flow_spec(path) {
+                files.push(path.to_path_buf());
+            }
+        }
+    } else if flows_dir.is_file() && is_flow_spec(flows_dir) {
+        files.push(flows_dir.to_path_buf());
+    }
+    Ok(files)
+}
+
+fn is_flow_spec(path: &Path) -> bool {
+    match path.extension().and_then(|s| s.to_str()) {
+        Some(ext) => matches!(
+            ext.to_lowercase().as_str(),
+            "md" | "markdown" | "yml" | "yaml"
+        ),
+        None => false,
+    }
+}
+
+fn parse_languages(values: &[String]) -> anyhow::Result<Vec<FlowLanguage>> {
+    let mut langs = Vec::new();
+    for value in values {
+        let v = value.trim().to_lowercase();
+        let lang = match v.as_str() {
+            "rust" => FlowLanguage::Rust,
+            "typescript" | "ts" => FlowLanguage::TypeScript,
+            "javascript" | "js" => FlowLanguage::JavaScript,
+            "python" | "py" => FlowLanguage::Python,
+            _ => {
+                return Err(anyhow!(
+                    "Unknown language `{}`. Use rust, typescript, javascript, python.",
+                    value
+                ))
+            }
+        };
+        langs.push(lang);
+    }
+    if langs.is_empty() {
+        Err(anyhow!("No valid languages specified."))
+    } else {
+        Ok(langs)
+    }
+}
+
+fn print_flow_check_report(report: &FlowCheckReport) {
+    println!(
+        "{} {} file(s), {} error(s), {} warning(s)",
+        style("Flow check:").bold(),
+        report.files.len(),
+        report.error_count,
+        report.warning_count
+    );
+    for file in &report.files {
+        if file.issues.is_empty() {
+            continue;
+        }
+        println!("  {}", style(&file.path).bold());
+        for issue in &file.issues {
+            let label = match issue.severity {
+                IssueSeverity::Error => style("error").red(),
+                IssueSeverity::Warning => style("warn").yellow(),
+            };
+            let field = issue
+                .field
+                .as_ref()
+                .map(|f| format!(" ({})", f))
+                .unwrap_or_default();
+            println!("    [{}] {}{}", label, issue.message, field);
+        }
+    }
+}
+
+fn print_flow_audit_report(output: &FlowAuditOutput) {
+    if let Some(flow_check) = &output.flow_check {
+        print_flow_check_report(flow_check);
+        println!();
+    }
+    let summary = &output.audit.summary;
+    println!(
+        "{} {} files scanned, {} findings",
+        style("Flow audit:").bold(),
+        summary.files_scanned,
+        summary.findings
+    );
+    if !summary.by_category.is_empty() {
+        let mut cats: Vec<_> = summary.by_category.iter().collect();
+        cats.sort_by(|a, b| b.1.cmp(a.1));
+        let cat_text = cats
+            .into_iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!("  categories: {}", cat_text);
+    }
+    if !summary.by_language.is_empty() {
+        let mut langs: Vec<_> = summary.by_language.iter().collect();
+        langs.sort_by(|a, b| b.1.cmp(a.1));
+        let lang_text = langs
+            .into_iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!("  languages: {}", lang_text);
+    }
+
+    if output.audit.findings.is_empty() {
+        println!("  {}", style("no findings").green());
+        return;
+    }
+
+    println!();
+    for finding in output.audit.findings.iter().take(20) {
+        let line = finding
+            .line
+            .map(|l| format!(":{}:", l))
+            .unwrap_or_else(|| ":".into());
+        println!(
+            "  [{}] {}{} {}",
+            style(format!("{:?}", finding.category)).yellow(),
+            finding.path,
+            line,
+            finding.message
+        );
+    }
+    if output.audit.findings.len() > 20 {
+        println!(
+            "  ...and {} more (use --json for full output)",
+            output.audit.findings.len() - 20
+        );
+    }
+}
+
+fn write_json(path: &Path, payload: &impl Serialize) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    let json = serde_json::to_string_pretty(payload)?;
+    fs::write(path, json)?;
+    Ok(())
 }
 
 fn collect_comment_files(

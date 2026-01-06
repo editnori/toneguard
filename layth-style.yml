@@ -442,3 +442,15 @@ comment_policy:
   max_ratio: 0.05
   ignore_globs: []
   allow_globs: []
+flow_rules:
+  indirection_budget: 5
+  min_steps: 3
+  max_steps: 12
+  min_invariants: 3
+  ignore_globs: []
+  allowed_reasons:
+    - variation
+    - isolation
+    - reuse
+    - policy
+    - volatility
