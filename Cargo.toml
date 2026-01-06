@@ -6,7 +6,7 @@ resolver = "2"
 authors = ["Layth M. Qassem"]
 license = "MIT"
 edition = "2021"
-version = "0.1.57"
+version = "0.1.58"
 
 [workspace.dependencies]
 aho-corasick = "0.7"
