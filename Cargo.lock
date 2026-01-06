@@ -247,7 +247,7 @@ dependencies = [
 
 [[package]]
 name = "dwg-cli"
-version = "0.1.54"
+version = "0.1.55"
 dependencies = [
  "anyhow",
  "clap",
@@ -264,7 +264,7 @@ dependencies = [
 
 [[package]]
 name = "dwg-core"
-version = "0.1.54"
+version = "0.1.55"
 dependencies = [
  "aho-corasick 0.7.20",
  "anyhow",
@@ -288,7 +288,7 @@ dependencies = [
 
 [[package]]
 name = "dwg-lsp"
-version = "0.1.54"
+version = "0.1.55"
 dependencies = [
  "anyhow",
  "dashmap 6.1.0",

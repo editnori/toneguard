@@ -1467,12 +1467,14 @@ fn flow_check_report(cfg: &Config, flows_dir: &Path) -> anyhow::Result<FlowCheck
     let mut warning_count = 0;
 
     if flow_files.is_empty() {
+        // No flow specs is a warning, not an error - flow specs are optional
+        // The audit can still run without them to detect entropy patterns
         let issue = FlowSpecIssue {
-            severity: IssueSeverity::Error,
+            severity: IssueSeverity::Warning,
             field: None,
-            message: format!("No flow specs found in {}", flows_dir.display()),
+            message: format!("No flow specs found in {} (flow specs are optional)", flows_dir.display()),
         };
-        error_count += 1;
+        warning_count += 1;
         files.push(FlowCheckFile {
             path: flows_dir.to_string_lossy().replace('\\', "/"),
             issues: vec![issue],
