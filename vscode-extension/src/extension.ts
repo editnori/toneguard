@@ -149,19 +149,20 @@ async function detectAIEnvironment(): Promise<AIEnvironment> {
 }
 
 /**
- * Checks if the ToneGuard skill is already installed for the given environment.
+ * Gets the global skill directory for the given AI environment.
+ * Skills are installed globally so they apply across all projects.
+ */
+function getGlobalSkillDir(env: 'claude' | 'codex'): string {
+    const homeDir = os.homedir();
+    const baseDir = env === 'claude' ? '.claude' : '.codex';
+    return path.join(homeDir, baseDir, 'skills', 'toneguard');
+}
+
+/**
+ * Checks if the ToneGuard skill is already installed globally for the given environment.
  */
 function isSkillInstalled(env: 'claude' | 'codex'): boolean {
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (!workspaceFolders || workspaceFolders.length === 0) {
-        return false;
-    }
-
-    const workspaceRoot = workspaceFolders[0].uri.fsPath;
-    const skillDir = env === 'claude' 
-        ? path.join(workspaceRoot, '.claude', 'skills', 'toneguard')
-        : path.join(workspaceRoot, '.codex', 'skills', 'toneguard');
-    
+    const skillDir = getGlobalSkillDir(env);
     return fs.existsSync(path.join(skillDir, 'SKILL.md'));
 }
 
@@ -177,22 +178,15 @@ function getSkillTemplate(context: vscode.ExtensionContext): string | undefined 
 }
 
 /**
- * Installs the ToneGuard skill for the specified AI environment.
+ * Installs the ToneGuard skill globally for the specified AI environment.
+ * Skills are installed in ~/.claude/skills/ or ~/.codex/skills/ so they
+ * apply across all projects.
  */
 async function installSkill(
     context: vscode.ExtensionContext, 
     env: 'claude' | 'codex',
     outputChannel: vscode.OutputChannel
 ): Promise<boolean> {
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (!workspaceFolders || workspaceFolders.length === 0) {
-        void vscode.window.showErrorMessage(
-            'ToneGuard: No workspace folder open. Please open a folder first.'
-        );
-        return false;
-    }
-
-    const workspaceRoot = workspaceFolders[0].uri.fsPath;
     const skillTemplate = getSkillTemplate(context);
     
     if (!skillTemplate) {
@@ -202,9 +196,8 @@ async function installSkill(
         return false;
     }
 
-    // Determine the target directory
-    const baseDir = env === 'claude' ? '.claude' : '.codex';
-    const skillDir = path.join(workspaceRoot, baseDir, 'skills', 'toneguard');
+    // Install to global directory (~/.claude/skills/ or ~/.codex/skills/)
+    const skillDir = getGlobalSkillDir(env);
     const skillFile = path.join(skillDir, 'SKILL.md');
 
     try {

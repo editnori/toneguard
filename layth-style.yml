@@ -429,6 +429,14 @@ repo_rules:
     - ".vscode/**"
     - "**/.vscode"
     - "**/.vscode/**"
+    # AI agent skill files (Claude Code, Codex)
+    - ".claude/**"
+    - "**/.claude/**"
+    - ".codex/**"
+    - "**/.codex/**"
+    - "**/SKILL.md"
+    - "**/AGENT.md"
+    - "**/CLAUDE.md"
 comment_policy:
   enabled: false
   max_ratio: 0.05
