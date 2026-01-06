@@ -10,6 +10,11 @@ import {
 
 let client: LanguageClient | undefined;
 
+// Skill installation state key
+const SKILL_PROMPT_DISMISSED_KEY = 'toneguard.skillPromptDismissed';
+
+type AIEnvironment = 'claude' | 'codex' | null;
+
 /**
  * Returns the platform-specific subdirectory name for bundled binaries.
  * Maps Node.js os.platform() and os.arch() to our binary directory structure.
@@ -115,6 +120,158 @@ function getServerCommand(context: vscode.ExtensionContext, userCommand: string)
     
     // Fall back to PATH
     return 'dwg-lsp';
+}
+
+/**
+ * Detects if the workspace has Claude Code or Codex AI environment markers.
+ */
+async function detectAIEnvironment(): Promise<AIEnvironment> {
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (!workspaceFolders || workspaceFolders.length === 0) {
+        return null;
+    }
+
+    const workspaceRoot = workspaceFolders[0].uri.fsPath;
+
+    // Check for Claude Code markers (.claude directory)
+    const claudeDir = path.join(workspaceRoot, '.claude');
+    if (fs.existsSync(claudeDir)) {
+        return 'claude';
+    }
+
+    // Check for Codex markers (.codex directory)
+    const codexDir = path.join(workspaceRoot, '.codex');
+    if (fs.existsSync(codexDir)) {
+        return 'codex';
+    }
+
+    return null;
+}
+
+/**
+ * Checks if the ToneGuard skill is already installed for the given environment.
+ */
+function isSkillInstalled(env: 'claude' | 'codex'): boolean {
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (!workspaceFolders || workspaceFolders.length === 0) {
+        return false;
+    }
+
+    const workspaceRoot = workspaceFolders[0].uri.fsPath;
+    const skillDir = env === 'claude' 
+        ? path.join(workspaceRoot, '.claude', 'skills', 'toneguard')
+        : path.join(workspaceRoot, '.codex', 'skills', 'toneguard');
+    
+    return fs.existsSync(path.join(skillDir, 'SKILL.md'));
+}
+
+/**
+ * Gets the bundled skill template content.
+ */
+function getSkillTemplate(context: vscode.ExtensionContext): string | undefined {
+    const templatePath = path.join(context.extensionPath, 'skills', 'toneguard-skill.md');
+    if (fs.existsSync(templatePath)) {
+        return fs.readFileSync(templatePath, 'utf8');
+    }
+    return undefined;
+}
+
+/**
+ * Installs the ToneGuard skill for the specified AI environment.
+ */
+async function installSkill(
+    context: vscode.ExtensionContext, 
+    env: 'claude' | 'codex',
+    outputChannel: vscode.OutputChannel
+): Promise<boolean> {
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (!workspaceFolders || workspaceFolders.length === 0) {
+        void vscode.window.showErrorMessage(
+            'ToneGuard: No workspace folder open. Please open a folder first.'
+        );
+        return false;
+    }
+
+    const workspaceRoot = workspaceFolders[0].uri.fsPath;
+    const skillTemplate = getSkillTemplate(context);
+    
+    if (!skillTemplate) {
+        void vscode.window.showErrorMessage(
+            'ToneGuard: Could not find skill template. Please reinstall the extension.'
+        );
+        return false;
+    }
+
+    // Determine the target directory
+    const baseDir = env === 'claude' ? '.claude' : '.codex';
+    const skillDir = path.join(workspaceRoot, baseDir, 'skills', 'toneguard');
+    const skillFile = path.join(skillDir, 'SKILL.md');
+
+    try {
+        // Create directory structure
+        fs.mkdirSync(skillDir, { recursive: true });
+        
+        // Write the skill file
+        fs.writeFileSync(skillFile, skillTemplate, 'utf8');
+        
+        outputChannel.appendLine(`ToneGuard: Installed skill to ${skillFile}`);
+        
+        void vscode.window.showInformationMessage(
+            `ToneGuard skill installed for ${env === 'claude' ? 'Claude Code' : 'Codex'}! ` +
+            `The AI will now follow ToneGuard writing guidelines.`,
+            'View Skill'
+        ).then((selection) => {
+            if (selection === 'View Skill') {
+                void vscode.workspace.openTextDocument(skillFile).then((doc) => {
+                    void vscode.window.showTextDocument(doc);
+                });
+            }
+        });
+        
+        return true;
+    } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        outputChannel.appendLine(`ToneGuard: Failed to install skill: ${errorMessage}`);
+        void vscode.window.showErrorMessage(
+            `ToneGuard: Failed to install skill: ${errorMessage}`
+        );
+        return false;
+    }
+}
+
+/**
+ * Prompts the user to install the ToneGuard skill if an AI environment is detected.
+ */
+async function promptSkillInstallation(
+    context: vscode.ExtensionContext,
+    env: 'claude' | 'codex',
+    outputChannel: vscode.OutputChannel
+): Promise<void> {
+    // Check if user has dismissed this prompt before
+    const dismissed = context.globalState.get<boolean>(SKILL_PROMPT_DISMISSED_KEY, false);
+    if (dismissed) {
+        return;
+    }
+
+    // Check if skill is already installed
+    if (isSkillInstalled(env)) {
+        return;
+    }
+
+    const envName = env === 'claude' ? 'Claude Code' : 'Codex';
+    const action = await vscode.window.showInformationMessage(
+        `ToneGuard detected ${envName}. Install skill to prevent AI slop at the source?`,
+        'Install',
+        'Not Now',
+        'Never Ask'
+    );
+
+    if (action === 'Install') {
+        await installSkill(context, env, outputChannel);
+    } else if (action === 'Never Ask') {
+        await context.globalState.update(SKILL_PROMPT_DISMISSED_KEY, true);
+        outputChannel.appendLine('ToneGuard: Skill installation prompt dismissed permanently.');
+    }
 }
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -223,6 +380,51 @@ export function activate(context: vscode.ExtensionContext): void {
             outputChannel.appendLine(`Bundled binary exists: ${getBundledServerPath(context) !== undefined}`);
         })
     );
+
+    // Command to install AI skill (auto-detect environment)
+    context.subscriptions.push(
+        vscode.commands.registerCommand('dwg.installSkill', async () => {
+            const env = await detectAIEnvironment();
+            if (env) {
+                await installSkill(context, env, outputChannel);
+            } else {
+                // No environment detected, ask user which one to install for
+                const choice = await vscode.window.showQuickPick(
+                    [
+                        { label: 'Claude Code', value: 'claude' as const },
+                        { label: 'Codex', value: 'codex' as const }
+                    ],
+                    { placeHolder: 'Select AI environment to install skill for' }
+                );
+                if (choice) {
+                    await installSkill(context, choice.value, outputChannel);
+                }
+            }
+        })
+    );
+
+    // Command to install skill for Claude Code specifically
+    context.subscriptions.push(
+        vscode.commands.registerCommand('dwg.installSkillClaude', async () => {
+            await installSkill(context, 'claude', outputChannel);
+        })
+    );
+
+    // Command to install skill for Codex specifically
+    context.subscriptions.push(
+        vscode.commands.registerCommand('dwg.installSkillCodex', async () => {
+            await installSkill(context, 'codex', outputChannel);
+        })
+    );
+
+    // Auto-detect AI environment and prompt for skill installation
+    void (async () => {
+        const env = await detectAIEnvironment();
+        if (env) {
+            outputChannel.appendLine(`ToneGuard: Detected ${env === 'claude' ? 'Claude Code' : 'Codex'} environment`);
+            await promptSkillInstallation(context, env, outputChannel);
+        }
+    })();
 }
 
 export async function deactivate(): Promise<void> {
