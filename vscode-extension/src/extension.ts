@@ -366,6 +366,15 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
             case 'runProposal':
                 void vscode.commands.executeCommand('dwg.flowPropose');
                 return;
+            case 'runOrganize':
+                void this.runOrganize(message);
+                return;
+            case 'orgFixCursor':
+                void this.runOrganizeFix('cursor');
+                return;
+            case 'orgFixClaude':
+                void this.runOrganizeFix('claude');
+                return;
             case 'newFlow':
                 void vscode.commands.executeCommand('dwg.flowNew');
                 return;
@@ -376,7 +385,7 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                 const config = this.getRuntimeConfig();
                 await openConfigFile(this.context, config.configPath);
         return;
-            }
+    }
             case 'addIgnore': {
                 const raw = typeof message.value === 'string' ? message.value : '';
                 const cleaned = raw.trim();
@@ -507,7 +516,7 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                     );
                 }
                 await this.refresh();
-                return;
+        return;
             }
             case 'toggleCategory': {
                 const category = typeof message.category === 'string' ? message.category : '';
@@ -720,6 +729,157 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
             ignoreGlobs,
             enabledFileTypes,
         };
+    }
+
+    private async runOrganize(message: any): Promise<void> {
+        const workspaceRoot = getWorkspaceRoot();
+        if (!workspaceRoot) {
+            void vscode.window.showErrorMessage('ToneGuard: No workspace open.');
+            return;
+        }
+
+        const config = this.getRuntimeConfig();
+        const cliCommand = getCliCommand(this.context, config.cliCommand);
+        if (!cliCommand) {
+            void vscode.window.showErrorMessage('ToneGuard: CLI not available.');
+            return;
+        }
+
+        const dataMinKb = typeof message.dataMinKb === 'number' ? message.dataMinKb : 100;
+        const skipGit = Boolean(message.skipGit);
+
+        const reportsDir = path.join(workspaceRoot, 'reports');
+        if (!fs.existsSync(reportsDir)) {
+            fs.mkdirSync(reportsDir, { recursive: true });
+        }
+        const outFile = path.join(reportsDir, 'organization-report.json');
+
+        const args = [
+            'organize',
+            '--json',
+            '--data-min-kb',
+            String(dataMinKb),
+            '--out',
+            outFile,
+        ];
+        if (skipGit) {
+            args.push('--no-git');
+        }
+        args.push(workspaceRoot);
+
+        this.outputChannel.show(true);
+        this.outputChannel.appendLine(`ToneGuard: ${cliCommand} ${args.join(' ')}`);
+
+        try {
+            await new Promise<void>((resolve, reject) => {
+                execFile(cliCommand, args, { cwd: workspaceRoot }, (error, stdout, stderr) => {
+                    if (stdout) {
+                        this.outputChannel.appendLine(stdout);
+                    }
+                    if (stderr) {
+                        this.outputChannel.appendLine(stderr);
+                    }
+                    if (error) {
+                        reject(error);
+                        return;
+                    }
+                    resolve();
+                });
+            });
+
+            // Parse and display results
+            if (fs.existsSync(outFile)) {
+                const report = JSON.parse(fs.readFileSync(outFile, 'utf-8'));
+                const findings = report.findings || [];
+                const repoType = report.repo_type || {};
+
+                // Update webview state
+                if (this.view) {
+                    this.view.webview.postMessage({
+                        type: 'organizeResult',
+                        repoType: repoType.kind || 'Mixed',
+                        confidence: ((repoType.confidence || 0) * 100).toFixed(0) + '%',
+                        issueCount: findings.length,
+                        findings: findings.slice(0, 20).map((f: any) => ({
+                            path: f.path,
+                            issue: f.issue,
+                            action: f.suggested_action,
+                            reason: f.reason,
+                            target: f.target_path,
+                        })),
+                    });
+                }
+
+                void vscode.window.showInformationMessage(
+                    `ToneGuard: Found ${findings.length} organization issue(s).`
+                );
+            }
+        } catch (error) {
+            const err = error as NodeJS.ErrnoException;
+            this.outputChannel.appendLine(`ToneGuard: Organization analysis failed: ${err.message}`);
+            void vscode.window.showErrorMessage('ToneGuard: Organization analysis failed. See output.');
+        }
+    }
+
+    private async runOrganizeFix(agent: 'cursor' | 'claude' | 'codex'): Promise<void> {
+        const workspaceRoot = getWorkspaceRoot();
+        if (!workspaceRoot) {
+            void vscode.window.showErrorMessage('ToneGuard: No workspace open.');
+            return;
+        }
+
+        const config = this.getRuntimeConfig();
+        const cliCommand = getCliCommand(this.context, config.cliCommand);
+        if (!cliCommand) {
+            void vscode.window.showErrorMessage('ToneGuard: CLI not available.');
+            return;
+        }
+
+        const args = ['organize', '--prompt-for', agent, workspaceRoot];
+
+        try {
+            const { stdout } = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+                execFile(cliCommand, args, { cwd: workspaceRoot }, (error, stdout, stderr) => {
+                    if (error) {
+                        reject(error);
+                        return;
+                    }
+                    resolve({ stdout, stderr });
+                });
+            });
+
+            // Copy prompt to clipboard
+            await vscode.env.clipboard.writeText(stdout);
+
+            if (agent === 'cursor') {
+                try {
+                    await vscode.commands.executeCommand('cursor.composer.new');
+                    await new Promise(resolve => setTimeout(resolve, 300));
+                    try {
+                        await vscode.commands.executeCommand('editor.action.clipboardPasteAction');
+                        void vscode.window.showInformationMessage(
+                            'ToneGuard: Organization fix instructions pasted into Composer.'
+                        );
+                    } catch {
+                        void vscode.window.showInformationMessage(
+                            'ToneGuard: Organization fix instructions copied. Press Cmd+V to paste.'
+                        );
+                    }
+                } catch {
+                    void vscode.window.showInformationMessage(
+                        'ToneGuard: Organization fix instructions copied. Open Composer (Cmd+I) and paste.'
+                    );
+                }
+            } else {
+                void vscode.window.showInformationMessage(
+                    `ToneGuard: Organization fix instructions copied. Paste in ${agent === 'claude' ? 'Claude Code' : 'Codex'}.`
+                );
+            }
+        } catch (error) {
+            const err = error as NodeJS.ErrnoException;
+            this.outputChannel.appendLine(`ToneGuard: Organization fix failed: ${err.message}`);
+            void vscode.window.showErrorMessage('ToneGuard: Failed to generate fix prompt. See output.');
+        }
     }
 
     private getHtmlForWebview(
@@ -1035,6 +1195,7 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
         <!-- Tab Navigation -->
         <div class="tabs">
             <button class="tab active" data-tab="findings">Findings</button>
+            <button class="tab" data-tab="organize">Organize</button>
             <button class="tab" data-tab="config">Config</button>
             <button class="tab" data-tab="skills">Skills</button>
             <button class="tab" data-tab="status">Status</button>
@@ -1056,6 +1217,47 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                 </div>
             </div>
             <button class="ghost" data-action="newFlow">+ New Flow Spec</button>
+        </div>
+
+        <!-- Tab: Organize -->
+        <div id="tab-organize" class="tab-content">
+            <div class="section-title">Repository Organization</div>
+            <div class="card">
+                <div class="card-row">
+                    <span class="label">Repo Type</span>
+                    <span class="badge" id="repoType">—</span>
+                </div>
+                <div class="card-row">
+                    <span class="label">Confidence</span>
+                    <span class="value" id="repoConfidence">—</span>
+                </div>
+                <div class="card-row">
+                    <span class="label">Issues Found</span>
+                    <span class="value" id="orgIssueCount">—</span>
+                </div>
+            </div>
+            <div class="actions">
+                <button data-action="runOrganize">Analyze Organization</button>
+                <div class="grid-2">
+                    <button class="secondary" data-action="orgFixCursor">Fix with Cursor</button>
+                    <button class="secondary" data-action="orgFixClaude">Fix with Claude</button>
+                </div>
+            </div>
+            <div id="orgFindings" class="card" style="display: none;">
+                <div class="section-title">Findings</div>
+                <div id="orgFindingsList"></div>
+            </div>
+            <div class="card">
+                <div class="section-title">Settings</div>
+                <div class="card-row">
+                    <span class="label">Min data file size</span>
+                    <input id="orgDataMinKb" type="number" value="100" min="1" style="width: 60px;" /> KB
+                </div>
+                <label class="toggle">
+                    <input id="orgSkipGit" type="checkbox" />
+                    Skip git status checks
+                </label>
+            </div>
         </div>
 
         <!-- Tab: Config -->
@@ -1507,8 +1709,8 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                     env: actionEl.dataset.env,
                     kind: actionEl.dataset.kind,
                 });
-                return;
-            }
+        return;
+    }
 
             vscode.postMessage({ type: action });
         });
@@ -1549,6 +1751,47 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
             if (input instanceof HTMLInputElement) {
                 vscode.postMessage({ type: 'toggleSetting', key: 'noRepoChecks', value: input.checked });
             }
+        });
+
+        // Organize tab handlers
+        window.addEventListener('message', (event) => {
+            const message = event.data;
+            if (message.type === 'organizeResult') {
+                // Update repo type info
+                const repoTypeEl = document.getElementById('repoType');
+                const confidenceEl = document.getElementById('repoConfidence');
+                const issueCountEl = document.getElementById('orgIssueCount');
+                const findingsCard = document.getElementById('orgFindings');
+                const findingsList = document.getElementById('orgFindingsList');
+
+                if (repoTypeEl) repoTypeEl.textContent = message.repoType;
+                if (confidenceEl) confidenceEl.textContent = message.confidence;
+                if (issueCountEl) issueCountEl.textContent = String(message.issueCount);
+
+                if (findingsCard && findingsList && message.findings.length > 0) {
+                    findingsCard.style.display = 'block';
+                    findingsList.innerHTML = message.findings.map(f => {
+                        const fname = f.path.split(/[/\\\\]/).pop() || f.path;
+                        const actionClass = f.action === 'move' ? 'blue' : f.action === 'delete' ? 'red' : 'magenta';
+                        return \`<div class="card-row" style="font-size: 11px;">
+                            <span style="color: var(--tg-accent);">\${f.action.toUpperCase()}</span>
+                            <span title="\${f.path}">\${fname}</span>
+                            <span class="label">\${f.reason}</span>
+                        </div>\`;
+                    }).join('');
+                } else if (findingsCard) {
+                    findingsCard.style.display = 'none';
+                }
+            }
+        });
+
+        // Handle runOrganize with settings
+        document.querySelectorAll('[data-action="runOrganize"]').forEach(el => {
+            el.addEventListener('click', () => {
+                const dataMinKb = parseInt(document.getElementById('orgDataMinKb')?.value || '100', 10);
+                const skipGit = document.getElementById('orgSkipGit')?.checked || false;
+                vscode.postMessage({ type: 'runOrganize', dataMinKb, skipGit });
+            });
         });
     </script>
 </body>
@@ -2283,7 +2526,7 @@ async function fixWithAI(
         }
         return;
     }
-    
+
     // For Claude/Codex: Copy to clipboard and try to focus their terminal
     await vscode.env.clipboard.writeText(prompt);
     outputChannel.appendLine(`ToneGuard: Copied ${findings.length} fix instructions to clipboard`);
@@ -2297,7 +2540,7 @@ async function fixWithAI(
         );
         if (claudeTerminal) {
             claudeTerminal.show();
-            void vscode.window.showInformationMessage(
+        void vscode.window.showInformationMessage(
                 `ToneGuard: ${findings.length} fix instructions copied. Press Cmd+V in Claude terminal.`
             );
         } else {
@@ -2871,7 +3114,7 @@ class FlowMapPanel {
         filePath: string,
         functionName?: string
     ): Promise<any> {
-        return new Promise((resolve, reject) => {
+    return new Promise((resolve, reject) => {
             const args = ['flow', 'graph', '--file', filePath, '--with-logic'];
             if (functionName) {
                 args.push('--fn', functionName);

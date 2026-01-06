@@ -438,3 +438,49 @@ comment_policy:
   max_ratio: 0.05
   ignore_globs: []
   allow_globs: []
+
+# Repo organization settings
+organize_rules:
+  # Minimum file size (KB) to flag as data file in source
+  data_file_min_kb: 100
+  # Extensions considered as data files
+  data_extensions:
+    - csv
+    - xlsx
+    - xls
+    - json
+    - parquet
+    - sqlite
+    - db
+  # Extensions considered as scripts
+  script_extensions:
+    - py
+    - sh
+    - bash
+    - ps1
+    - rb
+    - pl
+  # Patterns that indicate legacy/backup files
+  legacy_patterns:
+    - "*_v[0-9]*"
+    - "*_old*"
+    - "*.bak"
+    - "*~"
+    - "*.orig"
+    - "*_backup*"
+    - "*_copy*"
+    - "Copy of *"
+  # Directories where scripts are expected
+  script_directories:
+    - scripts
+    - bin
+    - tools
+    - utils
+  # Directories where data files are expected
+  data_directories:
+    - data
+    - assets
+    - fixtures
+    - testdata
+  # Check git status for untracked experiments
+  check_git_status: true

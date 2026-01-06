@@ -18,6 +18,7 @@ pub mod cfg;
 pub mod coverage;
 pub mod dfg;
 pub mod flow;
+pub mod organize;
 pub mod symbols;
 
 /// Heading capitalisation policy.
@@ -391,6 +392,8 @@ pub struct Config {
     pub repo_rules: RepoRules,
     pub comment_policy: CommentPolicy,
     pub flow_rules: flow::FlowRules,
+    #[serde(default)]
+    pub organize_rules: organize::OrganizeConfig,
 }
 
 impl Default for Config {
@@ -624,6 +627,7 @@ impl Default for Config {
             repo_rules: RepoRules::default(),
             comment_policy: CommentPolicy::default(),
             flow_rules: flow::FlowRules::default(),
+            organize_rules: organize::OrganizeConfig::default(),
         }
     }
 }

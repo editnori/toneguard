@@ -12,6 +12,7 @@ use console::style;
 use dwg_core::{
     arch::{FlowAuditConfig, FlowAuditReport, Language as FlowLanguage},
     flow::{FlowSpecIssue, IssueSeverity},
+    organize::{analyze_organization, generate_organize_prompt, OrganizeConfig, OrganizationReport},
     parse_category, Analyzer, Category, CommentPolicy, Config, DocumentReport,
 };
 use globset::{Glob, GlobSet, GlobSetBuilder};
@@ -135,6 +136,41 @@ struct CalibrateArgs {
 struct FlowArgs {
     #[command(subcommand)]
     command: FlowCommand,
+}
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "dwg organize",
+    about = "Analyze repo organization and suggest cleanup."
+)]
+struct OrganizeArgs {
+    /// Path to config file (YAML).
+    #[arg(long, default_value = "layth-style.yml")]
+    config: PathBuf,
+
+    /// Emit JSON output for automation.
+    #[arg(long, action = ArgAction::SetTrue)]
+    json: bool,
+
+    /// Generate AI prompt for reorganization (cursor, claude, codex).
+    #[arg(long, value_name = "AGENT")]
+    prompt_for: Option<String>,
+
+    /// Minimum file size (KB) to flag as data file.
+    #[arg(long, default_value = "100")]
+    data_min_kb: u64,
+
+    /// Skip git status checks.
+    #[arg(long, action = ArgAction::SetTrue)]
+    no_git: bool,
+
+    /// Write output to file.
+    #[arg(long)]
+    out: Option<PathBuf>,
+
+    /// Paths to analyze.
+    #[arg(value_name = "PATH", default_value = ".")]
+    paths: Vec<PathBuf>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -355,6 +391,14 @@ fn main() -> anyhow::Result<()> {
             forwarded.extend_from_slice(&argv[2..]);
             let flow_args = FlowArgs::parse_from(forwarded);
             run_flow(flow_args)?;
+            return Ok(());
+        }
+        if subcommand == OsStr::new("organize") {
+            let mut forwarded = Vec::with_capacity(argv.len() - 1);
+            forwarded.push(argv[0].clone());
+            forwarded.extend_from_slice(&argv[2..]);
+            let organize_args = OrganizeArgs::parse_from(forwarded);
+            run_organize(organize_args)?;
             return Ok(());
         }
     }
@@ -2397,4 +2441,158 @@ fn strip_comments(path: &Path, syntax: CommentSyntax) -> anyhow::Result<bool> {
         fs::write(path, output)?;
     }
     Ok(changed)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// organize subcommand
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn run_organize(args: OrganizeArgs) -> anyhow::Result<()> {
+    let root = if args.paths.is_empty() {
+        PathBuf::from(".")
+    } else {
+        args.paths[0].clone()
+    };
+
+    let root = fs::canonicalize(&root).unwrap_or(root);
+
+    // Build config
+    let mut config = OrganizeConfig::default();
+    config.data_file_min_size = args.data_min_kb * 1024;
+    config.check_git_status = !args.no_git;
+
+    // Run analysis
+    let report = analyze_organization(&root, &config)?;
+
+    // Generate output based on options
+    if let Some(agent) = &args.prompt_for {
+        let prompt = generate_organize_prompt(&report, agent);
+        if let Some(out) = &args.out {
+            fs::write(out, &prompt)?;
+            println!("Organization prompt written to {}", out.display());
+        } else {
+            println!("{}", prompt);
+        }
+    } else if args.json {
+        let json = serde_json::to_string_pretty(&report)?;
+        if let Some(out) = &args.out {
+            fs::write(out, &json)?;
+            println!("Organization report written to {}", out.display());
+        } else {
+            println!("{}", json);
+        }
+    } else {
+        // Human-readable output
+        print_organize_report(&report);
+        if let Some(out) = &args.out {
+            let json = serde_json::to_string_pretty(&report)?;
+            fs::write(out, &json)?;
+            println!("\nReport written to {}", out.display());
+        }
+    }
+
+    Ok(())
+}
+
+fn print_organize_report(report: &OrganizationReport) {
+    use console::style;
+
+    println!();
+    println!(
+        "{}",
+        style("Repository Organization Analysis").bold().cyan()
+    );
+    println!("{}", style("═".repeat(50)).dim());
+
+    // Repo type
+    println!(
+        "\n{}: {:?} (confidence: {:.0}%)",
+        style("Detected Type").bold(),
+        report.repo_type.kind,
+        report.repo_type.confidence * 100.0
+    );
+    if !report.repo_type.indicators.is_empty() {
+        println!("  Indicators: {}", report.repo_type.indicators.join(", "));
+    }
+    if !report.repo_type.expected_structure.is_empty() {
+        println!(
+            "  Expected structure: {}",
+            report.repo_type.expected_structure.join(", ")
+        );
+    }
+
+    println!("\n{}: {}", style("Files Scanned").bold(), report.files_scanned);
+    println!(
+        "{}: {}",
+        style("Issues Found").bold(),
+        style(report.findings.len()).yellow()
+    );
+
+    if report.findings.is_empty() {
+        println!(
+            "\n{}",
+            style("No organizational issues found. Repository is well-organized.").green()
+        );
+        return;
+    }
+
+    // Summary by type
+    println!("\n{}", style("Summary by Issue Type:").bold());
+    for (issue_type, count) in &report.summary {
+        println!("  {}: {}", issue_type.replace('_', " "), count);
+    }
+
+    // Findings grouped by type
+    println!("\n{}", style("Findings:").bold());
+
+    // Group findings
+    let mut by_type: std::collections::BTreeMap<String, Vec<&dwg_core::organize::OrganizationFinding>> =
+        std::collections::BTreeMap::new();
+    for finding in &report.findings {
+        let key = format!("{:?}", finding.issue);
+        by_type.entry(key).or_default().push(finding);
+    }
+
+    for (issue_type, findings) in by_type {
+        println!(
+            "\n  {} ({}):",
+            style(&issue_type).yellow().bold(),
+            findings.len()
+        );
+        for finding in findings.iter().take(10) {
+            let path_display = finding
+                .path
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| finding.path.display().to_string());
+
+            let action = match finding.suggested_action {
+                dwg_core::organize::Action::Move => style("MOVE").blue(),
+                dwg_core::organize::Action::Delete => style("DELETE").red(),
+                dwg_core::organize::Action::Archive => style("ARCHIVE").magenta(),
+                dwg_core::organize::Action::Gitignore => style("GITIGNORE").dim(),
+            };
+
+            println!("    {} {} - {}", action, path_display, finding.reason);
+
+            if let Some(target) = &finding.target_path {
+                println!(
+                    "      → {}",
+                    style(target.display()).dim()
+                );
+            }
+        }
+        if findings.len() > 10 {
+            println!(
+                "    {} more...",
+                style(format!("... and {}", findings.len() - 10)).dim()
+            );
+        }
+    }
+
+    println!();
+    println!(
+        "{}",
+        style("Use --prompt-for cursor|claude|codex to generate AI fix instructions").dim()
+    );
 }
