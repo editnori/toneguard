@@ -766,7 +766,7 @@ async function promptSkillInstallation(
 export function activate(context: vscode.ExtensionContext): void {
     const config = vscode.workspace.getConfiguration('dwg');
     const userCommand = config.get<string>('command', 'dwg-lsp');
-    const userCliCommand = config.get<string>('cliCommand', 'dwg');
+    const userCliCommand = config.get<string>('cliCommand', '');
     const userConfigPath = config.get<string>('configPath', 'layth-style.yml');
     const profile = config.get<string>('profile', '').trim();
 
