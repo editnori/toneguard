@@ -720,9 +720,13 @@ impl<'a> RustCfgBuilder<'a> {
         let if_node = self.cfg.add_node(NodeKind::If, (line, line));
         self.cfg.add_edge(self.current_node, if_node, EdgeKind::Fallthrough, None);
 
-        // Create merge node
+        // Create merge node (may become unreachable if both branches exit)
         let end_line = get_block_end_line(&expr_if.then_branch);
         let merge_node = self.cfg.add_node(NodeKind::Block, (end_line, end_line));
+
+        // Track if any branch reaches the merge node
+        let mut true_reaches_merge = false;
+        let mut false_reaches_merge = false;
 
         // True branch
         let true_block = self.cfg.add_node(NodeKind::Block, (line + 1, line + 1));
@@ -734,6 +738,7 @@ impl<'a> RustCfgBuilder<'a> {
         // Connect to merge if not already exited
         if !self.is_exit_node(self.current_node) {
             self.cfg.add_edge(self.current_node, merge_node, EdgeKind::Fallthrough, None);
+            true_reaches_merge = true;
         }
 
         // False branch
@@ -746,13 +751,21 @@ impl<'a> RustCfgBuilder<'a> {
             
             if !self.is_exit_node(self.current_node) {
                 self.cfg.add_edge(self.current_node, merge_node, EdgeKind::Fallthrough, None);
+                false_reaches_merge = true;
             }
         } else {
             // No else - false branch goes directly to merge
             self.cfg.add_edge(if_node, merge_node, EdgeKind::FalseBranch, Some(cond_str));
+            false_reaches_merge = true;
         }
 
-        self.current_node = merge_node;
+        // Only continue from merge if at least one branch reaches it
+        // Otherwise, both branches exit and merge is unreachable (but we don't flag it as dead code)
+        if true_reaches_merge || false_reaches_merge {
+            self.current_node = merge_node;
+        }
+        // If neither branch reaches merge, current_node stays at last exit node,
+        // which means subsequent code will be correctly marked as unreachable
     }
 
     fn visit_match(&mut self, expr_match: &syn::ExprMatch) {

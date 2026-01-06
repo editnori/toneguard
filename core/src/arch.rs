@@ -2311,7 +2311,14 @@ fn detect_dead_branches(cfg: &ControlFlowGraph, _path: &Path) -> Vec<FlowFinding
             continue;
         }
         
+        // Skip nodes with no source range (internal CFG nodes)
         if node.source_range.0 == 0 {
+            continue;
+        }
+        
+        // Skip empty blocks that are just merge points from if/else where both branches exit
+        // These are CFG artifacts, not user code issues
+        if matches!(node.kind, NodeKind::Block) && node.statements.is_empty() {
             continue;
         }
         
