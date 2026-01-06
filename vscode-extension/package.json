@@ -2,7 +2,7 @@
   "name": "toneguard",
   "displayName": "ToneGuard",
   "description": "Zero-setup AI slop detection for Markdown. Highlights generic, AI-style writing patterns instantly.",
-  "version": "0.1.46",
+  "version": "0.1.47",
   "publisher": "editnori",
   "icon": "icon.png",
   "engines": {
@@ -25,6 +25,8 @@
     "onLanguage:markdown",
     "onCommand:dwg.lintWorkspace",
     "onCommand:dwg.flowAudit",
+    "onCommand:dwg.flowPropose",
+    "onCommand:dwg.flowNew",
     "onCommand:dwg.installSkill",
     "onCommand:dwg.installLogicFlowSkill",
     "onCommand:dwg.installSkillClaude",
@@ -45,6 +47,16 @@
       {
         "command": "dwg.flowAudit",
         "title": "ToneGuard: Flow Audit Workspace",
+        "category": "ToneGuard"
+      },
+      {
+        "command": "dwg.flowPropose",
+        "title": "ToneGuard: Generate Flow Proposal (Markdown)",
+        "category": "ToneGuard"
+      },
+      {
+        "command": "dwg.flowNew",
+        "title": "ToneGuard: New Flow Spec",
         "category": "ToneGuard"
       },
       {

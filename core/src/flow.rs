@@ -12,6 +12,9 @@ pub struct FlowRules {
     pub min_invariants: usize,
     pub ignore_globs: Vec<String>,
     pub allowed_reasons: Vec<String>,
+    pub duplication_min_instances: usize,
+    pub duplication_min_tokens: usize,
+    pub duplication_max_groups: usize,
 }
 
 impl Default for FlowRules {
@@ -29,6 +32,9 @@ impl Default for FlowRules {
                 "policy".into(),
                 "volatility".into(),
             ],
+            duplication_min_instances: 3,
+            duplication_min_tokens: 80,
+            duplication_max_groups: 20,
         }
     }
 }

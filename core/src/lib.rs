@@ -1004,7 +1004,7 @@ impl std::fmt::Display for Category {
     }
 }
 
-fn parse_category(name: &str) -> Option<Category> {
+pub fn parse_category(name: &str) -> Option<Category> {
     let n = name.trim().to_lowercase();
     match n.as_str() {
         "puffery" => Some(Category::Puffery),

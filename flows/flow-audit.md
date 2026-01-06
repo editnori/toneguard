@@ -21,7 +21,7 @@ steps:
   - "Load config"
   - "Optionally validate flow specs"
   - "Scan code files"
-  - "Detect placeholders, lonely abstractions, pass-through chains"
+  - "Detect placeholders, lonely abstractions, pass-through chains, duplication clusters"
   - "Summarize findings"
   - "Write JSON report"
 invariants:

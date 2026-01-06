@@ -454,3 +454,6 @@ flow_rules:
     - reuse
     - policy
     - volatility
+  duplication_min_instances: 3
+  duplication_min_tokens: 80
+  duplication_max_groups: 20

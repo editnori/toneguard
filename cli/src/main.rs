@@ -12,7 +12,7 @@ use console::style;
 use dwg_core::{
     arch::{FlowAuditConfig, FlowAuditReport, Language as FlowLanguage},
     flow::{FlowSpecIssue, IssueSeverity},
-    Analyzer, Category, CommentPolicy, Config, DocumentReport,
+    parse_category, Analyzer, Category, CommentPolicy, Config, DocumentReport,
 };
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use regex::Regex;
@@ -143,6 +143,10 @@ enum FlowCommand {
     Check(FlowCheckArgs),
     /// Run static entropy detectors and optional flow checks.
     Audit(FlowAuditArgs),
+    /// Generate a reviewable Markdown artifact from flow checks + audit.
+    Propose(FlowProposeArgs),
+    /// Create a new flow spec file (an artifact to review).
+    New(FlowNewArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -193,6 +197,64 @@ struct FlowAuditArgs {
     /// Paths to scan (defaults to current directory).
     #[arg(value_name = "PATH", num_args = 0..)]
     paths: Vec<PathBuf>,
+}
+
+#[derive(Debug, Parser)]
+struct FlowProposeArgs {
+    /// Path to config file (YAML).
+    #[arg(long, default_value = "layth-style.yml")]
+    config: PathBuf,
+
+    /// Directory containing flow specs.
+    #[arg(long, default_value = "flows")]
+    flows: PathBuf,
+
+    /// Skip flow spec validation.
+    #[arg(long, action = ArgAction::SetTrue)]
+    no_flow_checks: bool,
+
+    /// Restrict to specific languages (comma-separated: rust,typescript,javascript,python).
+    #[arg(long, value_delimiter = ',', value_name = "LANG[,LANG]")]
+    language: Vec<String>,
+
+    /// Write Markdown output to file (prints to stdout if omitted).
+    #[arg(long)]
+    out: Option<PathBuf>,
+
+    /// Paths to scan (defaults to current directory).
+    #[arg(value_name = "PATH", num_args = 0..)]
+    paths: Vec<PathBuf>,
+}
+
+#[derive(Debug, Parser)]
+struct FlowNewArgs {
+    /// Path to config file (YAML).
+    #[arg(long, default_value = "layth-style.yml")]
+    config: PathBuf,
+
+    /// Directory containing flow specs.
+    #[arg(long, default_value = "flows")]
+    flows: PathBuf,
+
+    /// Flow name (human-readable).
+    #[arg(long)]
+    name: String,
+
+    /// Flow entrypoint (route/command/job/etc).
+    #[arg(long)]
+    entrypoint: String,
+
+    /// Optional language hint (e.g., rust, typescript, python).
+    #[arg(long)]
+    language: Option<String>,
+
+    /// Output path (defaults to flows/<slug>.md).
+    #[arg(long)]
+    out: Option<PathBuf>,
+
+    /// Overwrite if the file already exists.
+    #[arg(long, action = ArgAction::SetTrue)]
+    force: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -452,33 +514,6 @@ fn load_config(path: &PathBuf) -> anyhow::Result<(Config, PathBuf)> {
         Ok((cfg, dir))
     } else {
         Ok((Config::default(), env::current_dir()?))
-    }
-}
-
-fn parse_category(name: &str) -> Option<Category> {
-    let n = name.trim().to_lowercase();
-    match n.as_str() {
-        "puffery" => Some(Category::Puffery),
-        "buzzword" => Some(Category::Buzzword),
-        "negative-parallelism" | "negative-parallel" => Some(Category::NegativeParallel),
-        "rule-of-three" => Some(Category::RuleOfThree),
-        "connector-glut" => Some(Category::ConnectorGlut),
-        "template" => Some(Category::Template),
-        "weasel" => Some(Category::Weasel),
-        "transition" => Some(Category::Transition),
-        "marketing" => Some(Category::Marketing),
-        "structure" => Some(Category::Structure),
-        "call-to-action" | "cta" => Some(Category::CallToAction),
-        "sentence-length" => Some(Category::SentenceLength),
-        "repetition" => Some(Category::Repetition),
-        "cadence" => Some(Category::Cadence),
-        "confidence" => Some(Category::Confidence),
-        "broad-term" => Some(Category::BroadTerm),
-        "tone" => Some(Category::Tone),
-        "em-dash" | "emdash" => Some(Category::EmDash),
-        "formatting" => Some(Category::Formatting),
-        "quote-style" => Some(Category::QuoteStyle),
-        _ => None,
     }
 }
 
@@ -1235,6 +1270,8 @@ fn run_flow(args: FlowArgs) -> anyhow::Result<()> {
     match args.command {
         FlowCommand::Check(check_args) => run_flow_check(check_args),
         FlowCommand::Audit(audit_args) => run_flow_audit(audit_args),
+        FlowCommand::Propose(propose_args) => run_flow_propose(propose_args),
+        FlowCommand::New(new_args) => run_flow_new(new_args),
     }
 }
 
@@ -1276,6 +1313,9 @@ fn run_flow_audit(args: FlowAuditArgs) -> anyhow::Result<()> {
     let mut audit_config = FlowAuditConfig::default();
     audit_config.ignore_globs = ignore_globs;
     audit_config.base_dir = Some(config_root.clone());
+    audit_config.duplication_min_instances = cfg.flow_rules.duplication_min_instances;
+    audit_config.duplication_min_tokens = cfg.flow_rules.duplication_min_tokens;
+    audit_config.duplication_max_groups = cfg.flow_rules.duplication_max_groups;
     if !args.language.is_empty() {
         audit_config.languages = parse_languages(&args.language)?;
     }
@@ -1316,6 +1356,95 @@ fn run_flow_audit(args: FlowAuditArgs) -> anyhow::Result<()> {
         std::process::exit(2);
     }
 
+    Ok(())
+}
+
+fn run_flow_propose(args: FlowProposeArgs) -> anyhow::Result<()> {
+    let (cfg, config_root) = load_config(&args.config)?;
+    let flows_dir = resolve_flows_dir(&config_root, &args.flows);
+    let flow_check = if args.no_flow_checks {
+        None
+    } else {
+        Some(flow_check_report(&cfg, &flows_dir)?)
+    };
+
+    let mut ignore_globs = cfg.repo_rules.ignore_globs.clone();
+    ignore_globs.extend(cfg.flow_rules.ignore_globs.clone());
+
+    let mut audit_config = FlowAuditConfig::default();
+    audit_config.ignore_globs = ignore_globs;
+    audit_config.base_dir = Some(config_root.clone());
+    audit_config.duplication_min_instances = cfg.flow_rules.duplication_min_instances;
+    audit_config.duplication_min_tokens = cfg.flow_rules.duplication_min_tokens;
+    audit_config.duplication_max_groups = cfg.flow_rules.duplication_max_groups;
+    if !args.language.is_empty() {
+        audit_config.languages = parse_languages(&args.language)?;
+    }
+
+    let scan_paths = if args.paths.is_empty() {
+        vec![config_root.clone()]
+    } else {
+        args.paths.clone()
+    };
+    let audit = dwg_core::arch::audit_paths(&scan_paths, &audit_config)?;
+
+    let markdown = render_flow_proposal(&flow_check, &audit);
+    if let Some(out) = &args.out {
+        write_text(out, &markdown)?;
+    } else {
+        print!("{markdown}");
+    }
+
+    let flow_errors = flow_check.as_ref().map(|r| r.error_count).unwrap_or(0);
+    let audit_errors = audit
+        .findings
+        .iter()
+        .filter(|f| matches!(f.severity, dwg_core::arch::FindingSeverity::Error))
+        .count();
+    if flow_errors > 0 || audit_errors > 0 {
+        std::process::exit(2);
+    }
+
+    Ok(())
+}
+
+fn run_flow_new(args: FlowNewArgs) -> anyhow::Result<()> {
+    let (cfg, config_root) = load_config(&args.config)?;
+    let flows_dir = resolve_flows_dir(&config_root, &args.flows);
+    fs::create_dir_all(&flows_dir)?;
+
+    let default_filename = format!("{}.md", slugify_kebab(&args.name));
+    let out_path = if let Some(out) = &args.out {
+        if out.is_absolute() {
+            out.clone()
+        } else {
+            config_root.join(out)
+        }
+    } else {
+        flows_dir.join(default_filename)
+    };
+
+    if out_path.exists() && !args.force {
+        return Err(anyhow!(
+            "Refusing to overwrite {}; pass --force to overwrite",
+            out_path.display()
+        ));
+    }
+
+    let indirection_budget = cfg.flow_rules.indirection_budget;
+    let content = render_flow_template(
+        &args.name,
+        &args.entrypoint,
+        args.language.as_deref(),
+        indirection_budget,
+    );
+    write_text(&out_path, &content)?;
+
+    let rel_path = pathdiff::diff_paths(&out_path, &config_root).unwrap_or(out_path.clone());
+    println!(
+        "Wrote flow spec: {}",
+        rel_path.to_string_lossy().replace('\\', "/")
+    );
     Ok(())
 }
 
@@ -1553,6 +1682,179 @@ fn write_json(path: &Path, payload: &impl Serialize) -> anyhow::Result<()> {
     let json = serde_json::to_string_pretty(payload)?;
     fs::write(path, json)?;
     Ok(())
+}
+
+fn write_text(path: &Path, content: &str) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    fs::write(path, content)?;
+    Ok(())
+}
+
+fn slugify_kebab(input: &str) -> String {
+    let mut out = String::new();
+    let mut prev_dash = false;
+    for ch in input.trim().chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            prev_dash = false;
+        } else if !prev_dash && !out.is_empty() {
+            out.push('-');
+            prev_dash = true;
+        }
+    }
+    out.trim_matches('-').to_string()
+}
+
+fn render_flow_template(
+    name: &str,
+    entrypoint: &str,
+    language: Option<&str>,
+    indirection_budget: Option<usize>,
+) -> String {
+    let mut out = String::new();
+    out.push_str("---\n");
+    out.push_str(&format!("name: \"{}\"\n", escape_yaml_string(name)));
+    out.push_str(&format!(
+        "entrypoint: \"{}\"\n",
+        escape_yaml_string(entrypoint)
+    ));
+    out.push_str("inputs:\n  - \"<input>\"\n");
+    out.push_str("outputs:\n  - \"<output>\"\n");
+    out.push_str("side_effects:\n  - \"<side effect>\"\n");
+    out.push_str("failure_modes:\n  - \"<failure mode>\"\n");
+    out.push_str("observability:\n  - \"<signal/log/metric>\"\n");
+    out.push_str("steps:\n");
+    out.push_str("  - \"<step 1>\"\n  - \"<step 2>\"\n  - \"<step 3>\"\n");
+    out.push_str("invariants:\n");
+    out.push_str("  - \"<invariant 1>\"\n  - \"<invariant 2>\"\n  - \"<invariant 3>\"\n");
+    if let Some(budget) = indirection_budget {
+        out.push_str(&format!("indirection_budget: {budget}\n"));
+    }
+    out.push_str("justifications:\n");
+    out.push_str("  - item: \"<new thing you might add>\"\n");
+    out.push_str("    reason: \"policy\"\n");
+    out.push_str("    evidence: \"<why does it exist?>\"\n");
+    out.push_str("tags: []\n");
+    out.push_str("owners: []\n");
+    if let Some(lang) = language {
+        if !lang.trim().is_empty() {
+            out.push_str(&format!("language: \"{}\"\n", escape_yaml_string(lang)));
+        }
+    }
+    out.push_str("---\n\n");
+    out.push_str(
+        "When in doubt, produce something people can point at.\n\nThis file is that artifact.\n",
+    );
+    out
+}
+
+fn escape_yaml_string(input: &str) -> String {
+    input.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn render_flow_proposal(flow_check: &Option<FlowCheckReport>, audit: &FlowAuditReport) -> String {
+    let mut out = String::new();
+    out.push_str("# ToneGuard Flow Proposal\n\n");
+    out.push_str("A concrete review artifact: flow spec checks + static entropy findings.\n\n");
+    out.push_str("## Flow checks\n\n");
+    match flow_check {
+        Some(report) => {
+            out.push_str(&format!("- Files: {}\n", report.files.len()));
+            out.push_str(&format!("- Errors: {}\n", report.error_count));
+            out.push_str(&format!("- Warnings: {}\n", report.warning_count));
+            out.push('\n');
+
+            for file in &report.files {
+                if file.issues.is_empty() {
+                    continue;
+                }
+                out.push_str(&format!("### {}\n\n", file.path));
+                for issue in &file.issues {
+                    out.push_str(&format!(
+                        "- {:?} {}{}\n",
+                        issue.severity,
+                        issue
+                            .field
+                            .as_ref()
+                            .map(|f| format!("({f}) "))
+                            .unwrap_or_default(),
+                        issue.message
+                    ));
+                }
+                out.push('\n');
+            }
+        }
+        None => {
+            out.push_str("- Skipped (`--no-flow-checks`).\n\n");
+        }
+    }
+
+    out.push_str("## Audit summary\n\n");
+    out.push_str(&format!(
+        "- Files scanned: {}\n",
+        audit.summary.files_scanned
+    ));
+    out.push_str(&format!("- Findings: {}\n", audit.summary.findings));
+    if !audit.summary.by_category.is_empty() {
+        out.push_str("- By category:\n");
+        for (key, value) in &audit.summary.by_category {
+            out.push_str(&format!("  - {key}: {value}\n"));
+        }
+    }
+    if !audit.summary.by_language.is_empty() {
+        out.push_str("- By language:\n");
+        for (key, value) in &audit.summary.by_language {
+            out.push_str(&format!("  - {key}: {value}\n"));
+        }
+    }
+    out.push('\n');
+
+    if audit.findings.is_empty() {
+        out.push_str("## Findings\n\nNo findings.\n");
+        return out;
+    }
+
+    out.push_str("## Findings\n\n");
+    let mut grouped: BTreeMap<String, Vec<&dwg_core::arch::FlowFinding>> = BTreeMap::new();
+    for finding in &audit.findings {
+        grouped
+            .entry(format!("{:?}", finding.category))
+            .or_default()
+            .push(finding);
+    }
+
+    for (category, items) in grouped {
+        out.push_str(&format!("### {} ({})\n\n", category, items.len()));
+        for finding in items {
+            let location = finding
+                .line
+                .map(|l| format!(":{}:", l))
+                .unwrap_or_else(|| ":".into());
+            out.push_str(&format!(
+                "- [{}] {}{} {}\n",
+                format!("{:?}", finding.severity),
+                finding.path,
+                location,
+                finding.message
+            ));
+            if !finding.evidence.is_empty() {
+                out.push_str("  - Evidence:\n");
+                for ev in &finding.evidence {
+                    out.push_str(&format!("    - {ev}\n"));
+                }
+            }
+        }
+        out.push('\n');
+    }
+
+    out.push_str("## Next steps\n\n");
+    out.push_str("- Either reduce the finding, or justify it in a flow spec under `justifications` (reason: variation/isolation/reuse/policy/volatility).\n");
+    out.push_str("- Keep logic in a readable, end-to-end flow: fewer hops, fewer knobs, clearer invariants.\n");
+    out
 }
 
 fn collect_comment_files(

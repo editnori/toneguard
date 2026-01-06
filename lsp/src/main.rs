@@ -10,7 +10,9 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use dashmap::DashMap;
-use dwg_core::{Analyzer, Category, Config, Diagnostic as CoreDiagnostic, Severity};
+use dwg_core::{
+    parse_category, Analyzer, Category, Config, Diagnostic as CoreDiagnostic, Severity,
+};
 use serde_json::Value;
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
@@ -39,33 +41,6 @@ impl CategoryFilter {
             return !self.disable.contains(&category) || self.enable.contains(&category);
         }
         !self.disable.contains(&category)
-    }
-}
-
-fn parse_category(name: &str) -> Option<Category> {
-    let n = name.trim().to_lowercase();
-    match n.as_str() {
-        "puffery" => Some(Category::Puffery),
-        "buzzword" => Some(Category::Buzzword),
-        "negative-parallelism" | "negative-parallel" => Some(Category::NegativeParallel),
-        "rule-of-three" => Some(Category::RuleOfThree),
-        "connector-glut" => Some(Category::ConnectorGlut),
-        "template" => Some(Category::Template),
-        "weasel" => Some(Category::Weasel),
-        "transition" => Some(Category::Transition),
-        "marketing" => Some(Category::Marketing),
-        "structure" => Some(Category::Structure),
-        "call-to-action" | "cta" => Some(Category::CallToAction),
-        "sentence-length" => Some(Category::SentenceLength),
-        "repetition" => Some(Category::Repetition),
-        "cadence" => Some(Category::Cadence),
-        "confidence" => Some(Category::Confidence),
-        "broad-term" => Some(Category::BroadTerm),
-        "tone" => Some(Category::Tone),
-        "em-dash" | "emdash" => Some(Category::EmDash),
-        "formatting" => Some(Category::Formatting),
-        "quote-style" => Some(Category::QuoteStyle),
-        _ => None,
     }
 }
 

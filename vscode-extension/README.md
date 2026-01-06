@@ -62,6 +62,8 @@ whitelist:
 
 - **ToneGuard: Lint Workspace** — Refresh diagnostics for all open files
 - **ToneGuard: Flow Audit Workspace** — Run flow audit detectors and write a report
+- **ToneGuard: Generate Flow Proposal (Markdown)** — Create a reviewable Markdown artifact from flow checks + audit
+- **ToneGuard: New Flow Spec** — Scaffold a new flow spec file under `flows/`
 - **ToneGuard: Show Server Info** — Display active server and config paths
 - **ToneGuard: Install Logic Flow Guardrails Skill** — Install the flow guardrail prompt
 

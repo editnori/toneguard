@@ -65,6 +65,10 @@ Common invocations you can drop into any repository:
   `dwg-cli flow check --config layth-style.yml`
 - Flow audit (entropy detectors + flow checks):\
   `dwg-cli flow audit --config layth-style.yml --out reports/flow-audit.json .`
+- Flow proposal (reviewable Markdown artifact):\
+  `dwg-cli flow propose --config layth-style.yml --out reports/flow-proposal.md .`
+- New flow spec (artifact-first scaffolding):\
+  `dwg-cli flow new --config layth-style.yml --name "..." --entrypoint "..."`
 
 ## Dependencies
 Install the following tools before building. They match the workspace's tested toolchain:
@@ -161,6 +165,10 @@ ToneGuard can enforce logic flow guardrails across codebases:
 - Validate flow specs: `dwg-cli flow check`
 - Audit code for pass-through wrappers, lonely abstractions, and placeholders:
   `dwg-cli flow audit --out reports/flow-audit.json .`
+- Generate a reviewable Markdown artifact:
+  `dwg-cli flow propose --out reports/flow-proposal.md .`
+- Scaffold a new flow spec artifact:
+  `dwg-cli flow new --name "..." --entrypoint "..."`
 
 See `flows/` in this repo for templates.
 
@@ -176,6 +184,4 @@ ToneGuard is licensed under the MIT License. See `LICENSE` for full terms. The M
 
 ## Contributing
 Open an issue or submit a pull request with a focused change set. Run the linters and tests before sending patches.
-
-
 

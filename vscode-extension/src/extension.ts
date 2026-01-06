@@ -490,6 +490,179 @@ export function activate(context: vscode.ExtensionContext): void {
             });
         })
     );
+
+    // Command to generate a Markdown flow proposal (review artifact) via the CLI
+    context.subscriptions.push(
+        vscode.commands.registerCommand('dwg.flowPropose', async () => {
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (!workspaceFolders || workspaceFolders.length === 0) {
+                void vscode.window.showErrorMessage('ToneGuard: No workspace open.');
+                return;
+            }
+            const workspaceRoot = workspaceFolders[0].uri.fsPath;
+            const reportPath = path.join(workspaceRoot, 'reports', 'flow-proposal.md');
+            const args = [
+                'flow',
+                'propose',
+                '--config',
+                configPath,
+                '--out',
+                reportPath,
+                workspaceRoot,
+            ];
+
+            outputChannel.show(true);
+            outputChannel.appendLine(`ToneGuard: Generating flow proposal...`);
+            outputChannel.appendLine(`ToneGuard: ${cliCommand} ${args.join(' ')}`);
+
+            execFile(cliCommand, args, { cwd: workspaceRoot }, (error, stdout, stderr) => {
+                if (stdout) {
+                    outputChannel.appendLine(stdout);
+                }
+                if (stderr) {
+                    outputChannel.appendLine(stderr);
+                }
+                if (error) {
+                    const err = error as NodeJS.ErrnoException;
+                    const message = err.message || String(err);
+                    outputChannel.appendLine(`ToneGuard: Flow propose failed: ${message}`);
+                    void vscode.window.showErrorMessage(
+                        `ToneGuard flow propose failed. See output for details.`
+                    );
+                    return;
+                }
+                outputChannel.appendLine(
+                    `ToneGuard: Flow proposal saved to ${reportPath}`
+                );
+                void vscode.window
+                    .showInformationMessage(
+                        'ToneGuard: Flow proposal generated.',
+                        'Open Proposal'
+                    )
+                    .then((selection) => {
+                        if (selection === 'Open Proposal') {
+                            void vscode.workspace
+                                .openTextDocument(reportPath)
+                                .then((doc) => {
+                                    void vscode.window.showTextDocument(doc, {
+                                        preview: false,
+                                    });
+                                });
+                        }
+                    });
+            });
+        })
+    );
+
+    // Command to create a new flow spec file (artifact-first)
+    context.subscriptions.push(
+        vscode.commands.registerCommand('dwg.flowNew', async () => {
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (!workspaceFolders || workspaceFolders.length === 0) {
+                void vscode.window.showErrorMessage('ToneGuard: No workspace open.');
+                return;
+            }
+            const workspaceRoot = workspaceFolders[0].uri.fsPath;
+
+            const name = await vscode.window.showInputBox({
+                prompt: 'Flow name (human-readable)',
+                placeHolder: 'E.g., "Create user account"',
+            });
+            if (!name) {
+                return;
+            }
+
+            const entrypoint = await vscode.window.showInputBox({
+                prompt: 'Entrypoint (route/command/job/etc)',
+                placeHolder: 'E.g., "POST /users" or "dwg flow audit"',
+            });
+            if (!entrypoint) {
+                return;
+            }
+
+            const language = await vscode.window.showInputBox({
+                prompt: 'Language hint (optional)',
+                placeHolder: 'rust / typescript / python',
+            });
+
+            function slugifyKebab(input: string): string {
+                const trimmed = input.trim();
+                let out = '';
+                let prevDash = false;
+                for (const ch of trimmed) {
+                    if (/[A-Za-z0-9]/.test(ch)) {
+                        out += ch.toLowerCase();
+                        prevDash = false;
+                    } else if (!prevDash && out.length > 0) {
+                        out += '-';
+                        prevDash = true;
+                    }
+                }
+                return out.replace(/^-+|-+$/g, '');
+            }
+
+            const filename = `${slugifyKebab(name)}.md`;
+            const outPath = path.join(workspaceRoot, 'flows', filename);
+
+            let force = false;
+            if (fs.existsSync(outPath)) {
+                const choice = await vscode.window.showWarningMessage(
+                    `Flow spec already exists: ${outPath}`,
+                    'Overwrite',
+                    'Cancel'
+                );
+                if (choice !== 'Overwrite') {
+                    return;
+                }
+                force = true;
+            }
+
+            const args = [
+                'flow',
+                'new',
+                '--config',
+                configPath,
+                '--name',
+                name,
+                '--entrypoint',
+                entrypoint,
+                '--out',
+                outPath,
+            ];
+            if (language && language.trim().length > 0) {
+                args.push('--language', language.trim());
+            }
+            if (force) {
+                args.push('--force');
+            }
+
+            outputChannel.show(true);
+            outputChannel.appendLine(`ToneGuard: Creating flow spec...`);
+            outputChannel.appendLine(`ToneGuard: ${cliCommand} ${args.join(' ')}`);
+
+            execFile(cliCommand, args, { cwd: workspaceRoot }, (error, stdout, stderr) => {
+                if (stdout) {
+                    outputChannel.appendLine(stdout);
+                }
+                if (stderr) {
+                    outputChannel.appendLine(stderr);
+                }
+                if (error) {
+                    const err = error as NodeJS.ErrnoException;
+                    const message = err.message || String(err);
+                    outputChannel.appendLine(`ToneGuard: Flow new failed: ${message}`);
+                    void vscode.window.showErrorMessage(
+                        `ToneGuard flow new failed. See output for details.`
+                    );
+                    return;
+                }
+
+                void vscode.workspace.openTextDocument(outPath).then((doc) => {
+                    void vscode.window.showTextDocument(doc, { preview: false });
+                });
+            });
+        })
+    );
     
     // Command to show which server/config is being used
     context.subscriptions.push(
