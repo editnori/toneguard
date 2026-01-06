@@ -61,6 +61,7 @@ whitelist:
 
 ## Commands
 
+- **ToneGuard: Run Recommended Review** — Runs flow audit + generates a proposal (best first step)
 - **ToneGuard: Lint Workspace** — Refresh diagnostics for all open files
 - **ToneGuard: Flow Audit Workspace** — Run flow audit detectors and write a report
 - **ToneGuard: Generate Flow Proposal (Markdown)** — Create a reviewable Markdown artifact from flow checks + audit

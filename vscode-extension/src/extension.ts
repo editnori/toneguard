@@ -18,7 +18,7 @@ type AIEnvironment = 'claude' | 'codex' | null;
 type SkillKind = 'writing' | 'logic-flow';
 
 type SidebarNode =
-    | { kind: 'section'; id: 'actions' | 'reports' | 'findings' }
+    | { kind: 'section'; id: 'status' | 'actions' | 'reports' | 'findings' }
     | { kind: 'info'; label: string; description?: string }
     | { kind: 'action'; label: string; command: vscode.Command; description?: string }
     | { kind: 'report'; label: string; path: string; command: vscode.Command }
@@ -61,6 +61,13 @@ class ToneGuardSidebarProvider implements vscode.TreeDataProvider<SidebarNode> {
     >();
     readonly onDidChangeTreeData = this.onDidChangeEmitter.event;
 
+    constructor(
+        private readonly context: vscode.ExtensionContext,
+        private readonly serverCommand: string,
+        private readonly cliCommand: string,
+        private readonly configPath: string
+    ) {}
+
     refresh(): void {
         this.onDidChangeEmitter.fire(undefined);
     }
@@ -68,7 +75,9 @@ class ToneGuardSidebarProvider implements vscode.TreeDataProvider<SidebarNode> {
     getTreeItem(element: SidebarNode): vscode.TreeItem {
         if (element.kind === 'section') {
             const label =
-                element.id === 'actions'
+                element.id === 'status'
+                    ? 'Status'
+                    : element.id === 'actions'
                     ? 'Actions'
                     : element.id === 'reports'
                       ? 'Reports'
@@ -166,6 +175,7 @@ class ToneGuardSidebarProvider implements vscode.TreeDataProvider<SidebarNode> {
 
         if (!element) {
             return [
+                { kind: 'section', id: 'status' },
                 { kind: 'section', id: 'actions' },
                 { kind: 'section', id: 'reports' },
                 { kind: 'section', id: 'findings' },
@@ -173,12 +183,26 @@ class ToneGuardSidebarProvider implements vscode.TreeDataProvider<SidebarNode> {
         }
 
         if (element.kind === 'section') {
+            if (element.id === 'status') {
+                return this.statusNodes(root);
+            }
+
             if (element.id === 'actions') {
                 return [
                     {
                         kind: 'action',
+                        label: 'Run Recommended (Audit + Proposal)',
+                        command: {
+                            command: 'dwg.runRecommended',
+                            title: 'Run Recommended',
+                        },
+                        description: 'Best first step',
+                    },
+                    {
+                        kind: 'action',
                         label: 'Run Flow Audit',
                         command: { command: 'dwg.flowAudit', title: 'Flow Audit' },
+                        description: 'Writes reports/flow-audit.json',
                     },
                     {
                         kind: 'action',
@@ -187,11 +211,13 @@ class ToneGuardSidebarProvider implements vscode.TreeDataProvider<SidebarNode> {
                             command: 'dwg.flowPropose',
                             title: 'Flow Propose',
                         },
+                        description: 'Writes reports/flow-proposal.md',
                     },
                     {
                         kind: 'action',
                         label: 'New Flow Spec',
                         command: { command: 'dwg.flowNew', title: 'Flow New' },
+                        description: 'Scaffold flows/*.md',
                     },
                     {
                         kind: 'action',
@@ -205,6 +231,11 @@ class ToneGuardSidebarProvider implements vscode.TreeDataProvider<SidebarNode> {
                         kind: 'action',
                         label: 'Install Writing Style Skill',
                         command: { command: 'dwg.installSkill', title: 'Install Skill' },
+                    },
+                    {
+                        kind: 'action',
+                        label: 'Open Docs (README)',
+                        command: { command: 'dwg.openDocs', title: 'Open Docs' },
                     },
                     {
                         kind: 'action',
@@ -307,6 +338,117 @@ class ToneGuardSidebarProvider implements vscode.TreeDataProvider<SidebarNode> {
         }
 
         return [];
+    }
+
+    private statusNodes(workspaceRoot: string): SidebarNode[] {
+        const platform = getPlatformDir();
+        const bundledCli = getBundledCliPath(this.context);
+        const bundledServer = getBundledServerPath(this.context);
+        const cliMode = bundledCli ? 'bundled' : 'PATH';
+        const serverMode = bundledServer ? 'bundled' : 'PATH';
+
+        const configShown = this.relOrBasename(workspaceRoot, this.configPath);
+        const cliShown = this.relOrBasename(workspaceRoot, this.cliCommand);
+        const serverShown = this.relOrBasename(workspaceRoot, this.serverCommand);
+
+        const nodes: SidebarNode[] = [
+            { kind: 'info', label: `Platform: ${platform}` },
+            { kind: 'info', label: `Config: ${configShown}` },
+            { kind: 'info', label: `CLI (${cliMode}): ${cliShown}` },
+            { kind: 'info', label: `LSP (${serverMode}): ${serverShown}` },
+        ];
+
+        const flowsDir = path.join(workspaceRoot, 'flows');
+        if (fs.existsSync(flowsDir)) {
+            try {
+                const files = fs
+                    .readdirSync(flowsDir)
+                    .filter((name) => name.endsWith('.md') || name.endsWith('.yaml') || name.endsWith('.yml'));
+                nodes.push({
+                    kind: 'info',
+                    label: `Flows: ${files.length} file(s)`,
+                    description: 'flows/',
+                });
+            } catch {
+                nodes.push({ kind: 'info', label: 'Flows: (unavailable)' });
+            }
+        } else {
+            nodes.push({ kind: 'info', label: 'Flows: none found', description: 'Create one' });
+        }
+
+        const auditPath = path.join(workspaceRoot, 'reports', 'flow-audit.json');
+        if (fs.existsSync(auditPath)) {
+            const report = this.readAuditReport(workspaceRoot);
+            const findings = Array.isArray(report?.audit?.findings)
+                ? report.audit.findings
+                : [];
+            const when = this.fileMtimeLabel(auditPath);
+            nodes.push({
+                kind: 'info',
+                label: `Last audit: ${findings.length} finding(s)`,
+                description: when ?? 'reports/flow-audit.json',
+            });
+        } else {
+            nodes.push({ kind: 'info', label: 'Last audit: none', description: 'Run Audit' });
+        }
+
+        const proposalPath = path.join(workspaceRoot, 'reports', 'flow-proposal.md');
+        if (fs.existsSync(proposalPath)) {
+            const when = this.fileMtimeLabel(proposalPath);
+            nodes.push({
+                kind: 'info',
+                label: 'Last proposal: exists',
+                description: when ?? 'reports/flow-proposal.md',
+            });
+        } else {
+            nodes.push({
+                kind: 'info',
+                label: 'Last proposal: none',
+                description: 'Generate Proposal',
+            });
+        }
+
+        if (!bundledCli || !bundledServer) {
+            nodes.push({
+                kind: 'info',
+                label: 'Bundled binaries missing for this platform',
+                description: 'Run scripts/install-local.sh',
+            });
+        }
+
+        return nodes;
+    }
+
+    private relOrBasename(workspaceRoot: string, value: string): string {
+        try {
+            const cleaned = String(value);
+            if (!cleaned) {
+                return '<unset>';
+            }
+            const normalized = cleaned.replace(/\\/g, '/');
+            if (path.isAbsolute(normalized)) {
+                if (normalized.startsWith(workspaceRoot.replace(/\\/g, '/'))) {
+                    const rel = normalizeReportedPath(
+                        path.relative(workspaceRoot, normalized)
+                    );
+                    return rel || path.basename(normalized);
+                }
+                return path.basename(normalized);
+            }
+            return normalized;
+        } catch {
+            return String(value);
+        }
+    }
+
+    private fileMtimeLabel(filePath: string): string | undefined {
+        try {
+            const stat = fs.statSync(filePath);
+            const when = stat.mtime;
+            return when.toLocaleString();
+        } catch {
+            return undefined;
+        }
     }
 
     private readAuditReport(workspaceRoot: string): any | undefined {
@@ -640,13 +782,25 @@ export function activate(context: vscode.ExtensionContext): void {
     outputChannel.appendLine(`ToneGuard: Using CLI: ${cliCommand}`);
     outputChannel.appendLine(`ToneGuard: Using config: ${configPath}`);
 
-    const sidebarProvider = new ToneGuardSidebarProvider();
+    const sidebarProvider = new ToneGuardSidebarProvider(
+        context,
+        command,
+        cliCommand,
+        configPath
+    );
     context.subscriptions.push(
         vscode.window.registerTreeDataProvider('toneguard.sidebar', sidebarProvider)
     );
     context.subscriptions.push(
         vscode.commands.registerCommand('dwg.refreshSidebar', () => {
             sidebarProvider.refresh();
+        })
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand('dwg.openDocs', async () => {
+            void vscode.env.openExternal(
+                vscode.Uri.parse('https://github.com/editnori/toneguard#readme')
+            );
         })
     );
     context.subscriptions.push(
@@ -721,6 +875,20 @@ export function activate(context: vscode.ExtensionContext): void {
     auditWatcher.onDidChange(() => sidebarProvider.refresh());
     auditWatcher.onDidDelete(() => sidebarProvider.refresh());
     context.subscriptions.push(auditWatcher);
+
+    const proposalWatcher = vscode.workspace.createFileSystemWatcher(
+        '**/reports/flow-proposal.md'
+    );
+    proposalWatcher.onDidCreate(() => sidebarProvider.refresh());
+    proposalWatcher.onDidChange(() => sidebarProvider.refresh());
+    proposalWatcher.onDidDelete(() => sidebarProvider.refresh());
+    context.subscriptions.push(proposalWatcher);
+
+    const flowsWatcher = vscode.workspace.createFileSystemWatcher('**/flows/*');
+    flowsWatcher.onDidCreate(() => sidebarProvider.refresh());
+    flowsWatcher.onDidChange(() => sidebarProvider.refresh());
+    flowsWatcher.onDidDelete(() => sidebarProvider.refresh());
+    context.subscriptions.push(flowsWatcher);
 
     const serverOptions: ServerOptions = {
         command,
@@ -798,6 +966,123 @@ export function activate(context: vscode.ExtensionContext): void {
             void vscode.window.showInformationMessage(
                 'ToneGuard: refreshed diagnostics for open files.'
             );
+        })
+    );
+
+    // One-click recommended workflow: audit + proposal (writes both reports)
+    context.subscriptions.push(
+        vscode.commands.registerCommand('dwg.runRecommended', async () => {
+            const workspaceRoot = getWorkspaceRoot();
+            if (!workspaceRoot) {
+                void vscode.window.showErrorMessage('ToneGuard: No workspace open.');
+                return;
+            }
+
+            const auditPath = path.join(workspaceRoot, 'reports', 'flow-audit.json');
+            const proposalPath = path.join(
+                workspaceRoot,
+                'reports',
+                'flow-proposal.md'
+            );
+
+            function runCli(args: string[], title: string): Promise<void> {
+                return new Promise((resolve, reject) => {
+                    outputChannel.show(true);
+                    outputChannel.appendLine(`ToneGuard: ${title}`);
+                    outputChannel.appendLine(`ToneGuard: ${cliCommand} ${args.join(' ')}`);
+                    execFile(
+                        cliCommand,
+                        args,
+                        { cwd: workspaceRoot },
+                        (error, stdout, stderr) => {
+                            if (stdout) {
+                                outputChannel.appendLine(stdout);
+                            }
+                            if (stderr) {
+                                outputChannel.appendLine(stderr);
+                            }
+                            if (error) {
+                                reject(error);
+                                return;
+                            }
+                            resolve();
+                        }
+                    );
+                });
+            }
+
+            try {
+                await vscode.window.withProgress(
+                    {
+                        location: vscode.ProgressLocation.Notification,
+                        title: 'ToneGuard: Running recommended review',
+                        cancellable: false,
+                    },
+                    async (progress) => {
+                        progress.report({ message: 'Running flow audit…' });
+                        await runCli(
+                            [
+                                'flow',
+                                'audit',
+                                '--config',
+                                configPath,
+                                '--out',
+                                auditPath,
+                                workspaceRoot,
+                            ],
+                            'Running flow audit…'
+                        );
+
+                        progress.report({ message: 'Generating flow proposal…' });
+                        await runCli(
+                            [
+                                'flow',
+                                'propose',
+                                '--config',
+                                configPath,
+                                '--out',
+                                proposalPath,
+                                workspaceRoot,
+                            ],
+                            'Generating flow proposal…'
+                        );
+                    }
+                );
+
+                sidebarProvider.refresh();
+                void vscode.window
+                    .showInformationMessage(
+                        'ToneGuard: Recommended review complete.',
+                        'Open Proposal'
+                    )
+                    .then((selection) => {
+                        if (selection === 'Open Proposal') {
+                            void vscode.workspace
+                                .openTextDocument(proposalPath)
+                                .then((doc) => {
+                                    void vscode.window.showTextDocument(doc, {
+                                        preview: false,
+                                    });
+                                });
+                        }
+                    });
+            } catch (error) {
+                const err = error as NodeJS.ErrnoException;
+                const message = err.message || String(err);
+                outputChannel.appendLine(
+                    `ToneGuard: Recommended run failed: ${message}`
+                );
+                if (err.code === 'ENOENT') {
+                    void vscode.window.showErrorMessage(
+                        'ToneGuard CLI not found for this platform. Bundle it (scripts/install-local.sh) or set dwg.cliCommand.',
+                        'Install Instructions'
+                    );
+                } else {
+                    void vscode.window.showErrorMessage(
+                        'ToneGuard: Recommended run failed. See output for details.'
+                    );
+                }
+            }
         })
     );
 
