@@ -29,7 +29,7 @@ Copy-paste friendly steps for getting ToneGuard running everywhere:
 2. Lint any repository (no need to clone ToneGuard):
 
    ```bash
-   cd path\to\your\project
+   cd path/to/your/project
    dwg-cli --config layth-style.yml --strict .
    ```
 
@@ -38,7 +38,7 @@ Copy-paste friendly steps for getting ToneGuard running everywhere:
 3. Install the VS Code extension once:
 
    - Download the latest `toneguard-*.vsix` from the releases page (or build it yourself, see **Extension**).
-   - Open VS Code ? **Extensions ? Install from VSIX�** and pick the file.
+   - Open VS Code > Extensions > Install from VSIX... and pick the file.
    - The extension shells out to the globally installed `dwg-cli`, so every workspace is ready to lint.
 
 Keep a copy of `layth-style.yml` in each repo (or set `dwg.configPath` to a shared location) so both the CLI and the extension load the rules you expect.
@@ -67,6 +67,10 @@ Common invocations you can drop into any repository:
   `dwg-cli flow audit --config layth-style.yml --out reports/flow-audit.json .`
 - Flow proposal (reviewable Markdown artifact):\
   `dwg-cli flow propose --config layth-style.yml --out reports/flow-proposal.md .`
+- Flow blueprint (repo-wide dependency graph):\
+  `dwg-cli flow blueprint --config layth-style.yml --out reports/flow-blueprint.json .`
+- Flow blueprint diff (refactor protector):\
+  `dwg-cli flow blueprint diff --before reports/flow-blueprint.before.json --after reports/flow-blueprint.after.json --md --out reports/flow-blueprint-diff.md`
 - New flow spec (artifact-first scaffolding):\
   `dwg-cli flow new --config layth-style.yml --name "..." --entrypoint "..."`
 
@@ -108,9 +112,9 @@ Adjust the ignore and allow lists in `layth-style.yml` if your project needs exe
 Common combinations:
 
 ```bash
-dwg --profile readme --only structure,marketing README.md
-dwg --disable transition,buzzword docs/
-dwg --no-repo-checks --only-repo stray-markdown,dup-variants .
+dwg-cli --profile readme --only structure,marketing README.md
+dwg-cli --disable transition,buzzword docs/
+dwg-cli --no-repo-checks --only-repo stray-markdown,dup-variants .
 ```
 
 Additional options include:
@@ -143,7 +147,7 @@ Install the resulting `toneguard-<version>.vsix` via "Extensions: Install from V
 
 ```bash
 cargo install dwg-cli --force
-dwg --strict docs/
+dwg-cli --strict docs/
 ```
 
 Use `--strict` in CI to enforce non-zero exits when densities cross the warning threshold.
@@ -152,8 +156,8 @@ Use `--strict` in CI to enforce non-zero exits when densities cross the warning 
 ToneGuard can audit and strip code comments when needed:
 
 ```bash
-dwg comments src/ --config layth-style.yml
-dwg comments --strip
+dwg-cli comments src/ --config layth-style.yml
+dwg-cli comments --strip src/
 ```
 
 Tune ratios and allow lists through `comment_policy` before running destructive operations.
@@ -167,6 +171,14 @@ ToneGuard can enforce logic flow guardrails across codebases:
   `dwg-cli flow audit --out reports/flow-audit.json .`
 - Generate a reviewable Markdown artifact:
   `dwg-cli flow propose --out reports/flow-proposal.md .`
+- Build a repo-wide dependency blueprint:
+  `dwg-cli flow blueprint --out reports/flow-blueprint.json .`
+- Compare two blueprint snapshots:
+  `dwg-cli flow blueprint diff --before reports/flow-blueprint.before.json --after reports/flow-blueprint.after.json --md --out reports/flow-blueprint-diff.md`
+- Write a mapping template for removed files:
+  `dwg-cli flow blueprint diff --before reports/flow-blueprint.before.json --after reports/flow-blueprint.after.json --write-mapping reports/flow-blueprint-mapping.yml`
+- Require a mapping for deletions/moves:
+  `dwg-cli flow blueprint diff --before reports/flow-blueprint.before.json --after reports/flow-blueprint.after.json --require-mapping reports/flow-blueprint-mapping.yml`
 - Scaffold a new flow spec artifact:
   `dwg-cli flow new --name "..." --entrypoint "..."`
 
@@ -184,4 +196,3 @@ ToneGuard is licensed under the MIT License. See `LICENSE` for full terms. The M
 
 ## Contributing
 Open an issue or submit a pull request with a focused change set. Run the linters and tests before sending patches.
-

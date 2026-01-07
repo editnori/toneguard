@@ -1,7 +1,7 @@
 [package]
 name = "dwg-cli"
 edition = "2021"
-version = "0.1.68"
+version = "0.1.69"
 description = "Command-line interface for the Deterministic Writing Guard style linter."
 license = "MIT"
 repository = "https://github.com/editnori/toneguard"
@@ -14,7 +14,7 @@ categories = ["command-line-utilities"]
 anyhow = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 console = { workspace = true }
-dwg-core = { path = "../core", version = "0.1.68" }
+dwg-core = { path = "../core", version = "0.1.69" }
 globset = { workspace = true }
 pathdiff = "0.2"
 regex = { workspace = true }

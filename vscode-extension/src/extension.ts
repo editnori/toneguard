@@ -545,6 +545,11 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
             case 'openDocs':
                 void vscode.commands.executeCommand('dwg.openDocs');
                 return;
+            case 'openGithubFeedback':
+                void vscode.env.openExternal(
+                    vscode.Uri.parse('https://github.com/editnori/toneguard/issues')
+                );
+                return;
             case 'openConfig': {
                 const config = this.getRuntimeConfig();
                 await openConfigFile(this.context, config.configPath);
@@ -4000,6 +4005,12 @@ class FlowMapPanel {
                                 ? new vscode.Range(message.line - 1, 0, message.line - 1, 0)
                                 : undefined,
                         });
+                        break;
+
+                    case 'openGithubFeedback':
+                        void vscode.env.openExternal(
+                            vscode.Uri.parse('https://github.com/editnori/toneguard/issues')
+                        );
                         break;
                 }
             },

@@ -662,6 +662,15 @@ function App() {
                     onThemeChange={(t) => theme.value = t}
                 />
             </TabPanel>
+
+            <div className="mt-3 pt-2 border-t border-border text-[10px] text-muted">
+                <button
+                    className="text-accent hover:text-text"
+                    onClick={() => vscode.postMessage({ type: 'openGithubFeedback' })}
+                >
+                    Please visit my GitHub for feedback
+                </button>
+            </div>
         </div>
     );
 }

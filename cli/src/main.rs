@@ -18,7 +18,7 @@ use dwg_core::{
 };
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use regex::Regex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_yaml::Value as YamlValue;
 use walkdir::WalkDir;
 
@@ -358,9 +358,49 @@ struct FlowBlueprintArgs {
     #[arg(long)]
     out: Option<PathBuf>,
 
+    #[command(subcommand)]
+    command: Option<FlowBlueprintCommand>,
+
     /// Files or directories to scan.
     #[arg(value_name = "PATH", default_value = ".", num_args = 0..)]
     paths: Vec<PathBuf>,
+}
+
+#[derive(Debug, Subcommand)]
+enum FlowBlueprintCommand {
+    /// Compare two blueprint snapshots and emit a diff + mapping template.
+    Diff(FlowBlueprintDiffArgs),
+}
+
+#[derive(Debug, Parser)]
+struct FlowBlueprintDiffArgs {
+    /// "Before" blueprint snapshot (JSON output from `dwg flow blueprint --format json`).
+    #[arg(long)]
+    before: PathBuf,
+
+    /// "After" blueprint snapshot (JSON output from `dwg flow blueprint --format json`).
+    #[arg(long)]
+    after: PathBuf,
+
+    /// Write output to file (prints to stdout if omitted).
+    #[arg(long)]
+    out: Option<PathBuf>,
+
+    /// Emit Markdown instead of JSON.
+    #[arg(long, action = ArgAction::SetTrue)]
+    md: bool,
+
+    /// Write a YAML mapping template for removed files.
+    #[arg(long = "write-mapping")]
+    write_mapping: Option<PathBuf>,
+
+    /// Require a YAML mapping file to cover all removed files.
+    #[arg(long = "require-mapping")]
+    require_mapping: Option<PathBuf>,
+
+    /// Maximum rename candidates per removed file.
+    #[arg(long, default_value = "3")]
+    max_candidates: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -1620,6 +1660,12 @@ fn run_flow_new(args: FlowNewArgs) -> anyhow::Result<()> {
 }
 
 fn run_flow_blueprint(args: FlowBlueprintArgs) -> anyhow::Result<()> {
+    if let Some(cmd) = args.command {
+        match cmd {
+            FlowBlueprintCommand::Diff(diff) => return run_flow_blueprint_diff(diff),
+        }
+    }
+
     let (cfg, config_root) = load_config(&args.config)?;
 
     let mut ignore_globs = cfg.repo_rules.ignore_globs.clone();
@@ -1655,16 +1701,464 @@ fn run_flow_blueprint(args: FlowBlueprintArgs) -> anyhow::Result<()> {
             }
         }
         other => {
-            return Err(anyhow!("Unsupported format: {other} (expected json or jsonl)"));
+            return Err(anyhow!(
+                "Unsupported format: {other} (expected json or jsonl)"
+            ));
         }
     }
 
     Ok(())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+struct BlueprintResolvedEdgeKey {
+    from: String,
+    to: String,
+    kind: dwg_core::blueprint::EdgeKind,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BlueprintRenameCandidate {
+    path: String,
+    score: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BlueprintMappingEntry {
+    old: String,
+    action: String,
+    new: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    candidates: Vec<BlueprintRenameCandidate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BlueprintMappingFile {
+    version: u32,
+    before: String,
+    after: String,
+    mappings: Vec<BlueprintMappingEntry>,
+}
+
+#[derive(Debug, Serialize)]
+struct BlueprintDiffReport {
+    before: BlueprintSnapshotSummary,
+    after: BlueprintSnapshotSummary,
+    nodes_added: Vec<String>,
+    nodes_removed: Vec<String>,
+    resolved_edges_added: Vec<BlueprintResolvedEdgeKey>,
+    resolved_edges_removed: Vec<BlueprintResolvedEdgeKey>,
+    rename_candidates: Vec<BlueprintRenameGroup>,
+    mapping_template: BlueprintMappingFile,
+    mapping_check: Option<BlueprintMappingCheck>,
+}
+
+#[derive(Debug, Serialize)]
+struct BlueprintSnapshotSummary {
+    nodes: usize,
+    edges: usize,
+    edges_resolved: usize,
+    errors: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct BlueprintRenameGroup {
+    old: String,
+    candidates: Vec<BlueprintRenameCandidate>,
+}
+
+#[derive(Debug, Serialize)]
+struct BlueprintMappingCheck {
+    unmapped: Vec<String>,
+    invalid: Vec<String>,
+}
+
+fn read_blueprint_snapshot(path: &Path) -> anyhow::Result<BlueprintReport> {
+    let raw = fs::read_to_string(path)
+        .with_context(|| format!("Failed to read blueprint snapshot {}", path.display()))?;
+    serde_json::from_str(&raw)
+        .with_context(|| format!("Failed to parse blueprint snapshot {}", path.display()))
+}
+
+fn resolved_edge_keys(report: &BlueprintReport) -> BTreeSet<BlueprintResolvedEdgeKey> {
+    report
+        .edges
+        .iter()
+        .filter(|e| e.resolved)
+        .filter_map(|e| {
+            e.to.as_ref()
+                .map(|to| (e.from.clone(), to.clone(), e.kind.clone()))
+        })
+        .map(|(from, to, kind)| BlueprintResolvedEdgeKey { from, to, kind })
+        .collect()
+}
+
+fn jaccard(a: &BTreeSet<String>, b: &BTreeSet<String>) -> f32 {
+    if a.is_empty() && b.is_empty() {
+        return 0.0;
+    }
+    let intersection = a.intersection(b).count() as f32;
+    let union = a.union(b).count() as f32;
+    if union <= 0.0 {
+        0.0
+    } else {
+        intersection / union
+    }
+}
+
+fn basename(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+fn build_neighbors(
+    edges: &BTreeSet<BlueprintResolvedEdgeKey>,
+) -> (
+    BTreeMap<String, BTreeSet<String>>,
+    BTreeMap<String, BTreeSet<String>>,
+) {
+    let mut outgoing: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut incoming: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for edge in edges {
+        outgoing
+            .entry(edge.from.clone())
+            .or_default()
+            .insert(edge.to.clone());
+        incoming
+            .entry(edge.to.clone())
+            .or_default()
+            .insert(edge.from.clone());
+    }
+    (outgoing, incoming)
+}
+
+fn build_blueprint_mapping_template(
+    before_path: &Path,
+    after_path: &Path,
+    removed: &[String],
+    candidates: &BTreeMap<String, Vec<BlueprintRenameCandidate>>,
+) -> BlueprintMappingFile {
+    let mut mappings = Vec::new();
+    for old in removed {
+        mappings.push(BlueprintMappingEntry {
+            old: old.clone(),
+            action: "unmapped".to_string(),
+            new: Vec::new(),
+            candidates: candidates.get(old).cloned().unwrap_or_default(),
+            reason: None,
+            notes: None,
+        });
+    }
+    BlueprintMappingFile {
+        version: 1,
+        before: before_path.to_string_lossy().to_string(),
+        after: after_path.to_string_lossy().to_string(),
+        mappings,
+    }
+}
+
+fn validate_blueprint_mapping(
+    mapping_path: &Path,
+    removed: &[String],
+    after_nodes: &BTreeSet<String>,
+) -> anyhow::Result<BlueprintMappingCheck> {
+    let raw = fs::read_to_string(mapping_path)
+        .with_context(|| format!("Failed to read mapping file {}", mapping_path.display()))?;
+    let mapping: BlueprintMappingFile = serde_yaml::from_str(&raw)
+        .with_context(|| format!("Failed to parse mapping file {}", mapping_path.display()))?;
+
+    let mut by_old: BTreeMap<String, BlueprintMappingEntry> = BTreeMap::new();
+    for entry in mapping.mappings {
+        by_old.insert(entry.old.clone(), entry);
+    }
+
+    let mut unmapped = Vec::new();
+    let mut invalid = Vec::new();
+
+    for old in removed {
+        let Some(entry) = by_old.get(old) else {
+            unmapped.push(old.clone());
+            continue;
+        };
+
+        let action = entry.action.trim().to_lowercase();
+        if action.is_empty() || action == "unmapped" {
+            unmapped.push(old.clone());
+            continue;
+        }
+
+        match action.as_str() {
+            "deleted" => {
+                if !entry.new.is_empty() {
+                    invalid.push(format!("{old}: action=deleted must not include new paths"));
+                }
+            }
+            "moved" | "renamed" | "merged" | "split" => {
+                if entry.new.is_empty() {
+                    invalid.push(format!(
+                        "{old}: action={action} requires at least one new path"
+                    ));
+                    continue;
+                }
+                for new_path in &entry.new {
+                    if !after_nodes.contains(new_path) {
+                        invalid.push(format!("{old}: maps to missing after node {new_path}"));
+                    }
+                }
+            }
+            other => {
+                unmapped.push(format!("{old} (unknown action: {other})"));
+            }
+        }
+    }
+
+    Ok(BlueprintMappingCheck { unmapped, invalid })
+}
+
+fn run_flow_blueprint_diff(args: FlowBlueprintDiffArgs) -> anyhow::Result<()> {
+    let before = read_blueprint_snapshot(&args.before)?;
+    let after = read_blueprint_snapshot(&args.after)?;
+
+    let before_nodes: BTreeSet<String> = before.nodes.iter().map(|n| n.path.clone()).collect();
+    let after_nodes: BTreeSet<String> = after.nodes.iter().map(|n| n.path.clone()).collect();
+
+    let nodes_added: Vec<String> = after_nodes.difference(&before_nodes).cloned().collect();
+    let nodes_removed: Vec<String> = before_nodes.difference(&after_nodes).cloned().collect();
+
+    let before_edges = resolved_edge_keys(&before);
+    let after_edges = resolved_edge_keys(&after);
+
+    let resolved_edges_added: Vec<BlueprintResolvedEdgeKey> =
+        after_edges.difference(&before_edges).cloned().collect();
+    let resolved_edges_removed: Vec<BlueprintResolvedEdgeKey> =
+        before_edges.difference(&after_edges).cloned().collect();
+
+    let (before_out, before_in) = build_neighbors(&before_edges);
+    let (after_out, after_in) = build_neighbors(&after_edges);
+
+    let mut candidate_map: BTreeMap<String, Vec<BlueprintRenameCandidate>> = BTreeMap::new();
+    for old in &nodes_removed {
+        let out_old = before_out.get(old).cloned().unwrap_or_default();
+        let in_old = before_in.get(old).cloned().unwrap_or_default();
+        let base_old = basename(old);
+
+        let mut scored: Vec<BlueprintRenameCandidate> = Vec::new();
+        for new_path in &nodes_added {
+            let out_new = after_out.get(new_path).cloned().unwrap_or_default();
+            let in_new = after_in.get(new_path).cloned().unwrap_or_default();
+            let base_new = basename(new_path);
+
+            let mut score = 0.65 * jaccard(&out_old, &out_new) + 0.35 * jaccard(&in_old, &in_new);
+            if base_old == base_new {
+                score += 0.2;
+            }
+            if score > 1.0 {
+                score = 1.0;
+            }
+            if score <= 0.0 {
+                continue;
+            }
+            scored.push(BlueprintRenameCandidate {
+                path: new_path.clone(),
+                score: (score * 1000.0).round() / 1000.0,
+            });
+        }
+
+        scored.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        scored.truncate(args.max_candidates.max(1));
+
+        candidate_map.insert(old.clone(), scored);
+    }
+
+    let rename_candidates: Vec<BlueprintRenameGroup> = nodes_removed
+        .iter()
+        .filter_map(|old| {
+            let candidates = candidate_map.get(old).cloned().unwrap_or_default();
+            if candidates.is_empty() {
+                return None;
+            }
+            Some(BlueprintRenameGroup {
+                old: old.clone(),
+                candidates,
+            })
+        })
+        .collect();
+
+    let mapping_template =
+        build_blueprint_mapping_template(&args.before, &args.after, &nodes_removed, &candidate_map);
+
+    if let Some(path) = &args.write_mapping {
+        let yaml = serde_yaml::to_string(&mapping_template)?;
+        write_text(path, &yaml)?;
+    }
+
+    let mapping_check = if let Some(path) = &args.require_mapping {
+        Some(validate_blueprint_mapping(
+            path,
+            &nodes_removed,
+            &after_nodes,
+        )?)
+    } else {
+        None
+    };
+
+    let report = BlueprintDiffReport {
+        before: BlueprintSnapshotSummary {
+            nodes: before.stats.nodes,
+            edges: before.stats.edges,
+            edges_resolved: before.stats.edges_resolved,
+            errors: before.errors.len(),
+        },
+        after: BlueprintSnapshotSummary {
+            nodes: after.stats.nodes,
+            edges: after.stats.edges,
+            edges_resolved: after.stats.edges_resolved,
+            errors: after.errors.len(),
+        },
+        nodes_added,
+        nodes_removed,
+        resolved_edges_added,
+        resolved_edges_removed,
+        rename_candidates,
+        mapping_template,
+        mapping_check,
+    };
+
+    if args.md {
+        let md = render_blueprint_diff_markdown(&args.before, &args.after, &report)?;
+        if let Some(out) = &args.out {
+            write_text(out, &md)?;
+        } else {
+            print!("{md}");
+        }
+    } else if let Some(out) = &args.out {
+        write_json(out, &report)?;
+    } else {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    }
+
+    if let Some(check) = &report.mapping_check {
+        if !check.unmapped.is_empty() || !check.invalid.is_empty() {
+            std::process::exit(2);
+        }
+    }
+
+    Ok(())
+}
+
+fn render_blueprint_diff_markdown(
+    before_path: &Path,
+    after_path: &Path,
+    report: &BlueprintDiffReport,
+) -> anyhow::Result<String> {
+    let mut out = String::new();
+    out.push_str("# Blueprint diff\n\n");
+    out.push_str(&format!(
+        "- Before: `{}` ({} files, {} resolved edges)\n",
+        before_path.to_string_lossy().replace('\\', "/"),
+        report.before.nodes,
+        report.before.edges_resolved
+    ));
+    out.push_str(&format!(
+        "- After: `{}` ({} files, {} resolved edges)\n\n",
+        after_path.to_string_lossy().replace('\\', "/"),
+        report.after.nodes,
+        report.after.edges_resolved
+    ));
+
+    out.push_str("## Nodes\n");
+    out.push_str(&format!("- Added: {}\n", report.nodes_added.len()));
+    out.push_str(&format!("- Removed: {}\n\n", report.nodes_removed.len()));
+    if !report.nodes_added.is_empty() {
+        out.push_str("### Added\n");
+        for path in &report.nodes_added {
+            out.push_str(&format!("- `{path}`\n"));
+        }
+        out.push('\n');
+    }
+    if !report.nodes_removed.is_empty() {
+        out.push_str("### Removed\n");
+        for path in &report.nodes_removed {
+            out.push_str(&format!("- `{path}`\n"));
+        }
+        out.push('\n');
+    }
+
+    out.push_str("## Resolved edges\n");
+    out.push_str(&format!("- Added: {}\n", report.resolved_edges_added.len()));
+    out.push_str(&format!(
+        "- Removed: {}\n\n",
+        report.resolved_edges_removed.len()
+    ));
+    if !report.resolved_edges_added.is_empty() {
+        out.push_str("### Added\n");
+        for edge in &report.resolved_edges_added {
+            out.push_str(&format!(
+                "- `{}` → `{}` ({:?})\n",
+                edge.from, edge.to, edge.kind
+            ));
+        }
+        out.push('\n');
+    }
+    if !report.resolved_edges_removed.is_empty() {
+        out.push_str("### Removed\n");
+        for edge in &report.resolved_edges_removed {
+            out.push_str(&format!(
+                "- `{}` → `{}` ({:?})\n",
+                edge.from, edge.to, edge.kind
+            ));
+        }
+        out.push('\n');
+    }
+
+    if !report.rename_candidates.is_empty() {
+        out.push_str("## Rename candidates\n");
+        for group in &report.rename_candidates {
+            out.push_str(&format!("- `{}`\n", group.old));
+            for cand in &group.candidates {
+                out.push_str(&format!("  - `{}` (score {})\n", cand.path, cand.score));
+            }
+        }
+        out.push('\n');
+    }
+
+    if let Some(check) = &report.mapping_check {
+        out.push_str("## Mapping check\n");
+        out.push_str(&format!("- Unmapped: {}\n", check.unmapped.len()));
+        out.push_str(&format!("- Invalid: {}\n\n", check.invalid.len()));
+        if !check.unmapped.is_empty() {
+            out.push_str("### Unmapped\n");
+            for item in &check.unmapped {
+                out.push_str(&format!("- `{item}`\n"));
+            }
+            out.push('\n');
+        }
+        if !check.invalid.is_empty() {
+            out.push_str("### Invalid\n");
+            for item in &check.invalid {
+                out.push_str(&format!("- {item}\n"));
+            }
+            out.push('\n');
+        }
+    }
+
+    out.push_str("## Mapping template\n\n");
+    out.push_str("```yaml\n");
+    out.push_str(&serde_yaml::to_string(&report.mapping_template)?);
+    out.push_str("```\n");
+    Ok(out)
+}
+
 fn run_flow_graph(args: FlowGraphArgs) -> anyhow::Result<()> {
-    use dwg_core::cfg::{build_cfg_rust, ControlFlowGraph, CfgLanguage};
     use dwg_core::arch::analyze_rust_logic;
+    use dwg_core::cfg::{build_cfg_rust, CfgLanguage, ControlFlowGraph};
 
     let path = &args.file;
     if !path.exists() {
@@ -1676,8 +2170,8 @@ fn run_flow_graph(args: FlowGraphArgs) -> anyhow::Result<()> {
 
     let cfgs: Vec<ControlFlowGraph> = match ext {
         "rs" => {
-            let file = syn::parse_file(&text)
-                .map_err(|e| anyhow!("Failed to parse Rust file: {}", e))?;
+            let file =
+                syn::parse_file(&text).map_err(|e| anyhow!("Failed to parse Rust file: {}", e))?;
 
             let mut result = Vec::new();
             for item in &file.items {
@@ -1693,7 +2187,10 @@ fn run_flow_graph(args: FlowGraphArgs) -> anyhow::Result<()> {
                     }
                     syn::Item::Impl(impl_block) => {
                         let self_ty = match &*impl_block.self_ty {
-                            syn::Type::Path(tp) => tp.path.segments.last()
+                            syn::Type::Path(tp) => tp
+                                .path
+                                .segments
+                                .last()
                                 .map(|s| s.ident.to_string())
                                 .unwrap_or_else(|| "Unknown".into()),
                             _ => "Unknown".into(),
@@ -1707,7 +2204,9 @@ fn run_flow_graph(args: FlowGraphArgs) -> anyhow::Result<()> {
                                         continue;
                                     }
                                 }
-                                result.push(dwg_core::cfg::build_cfg_rust_method(method, path, &self_ty));
+                                result.push(dwg_core::cfg::build_cfg_rust_method(
+                                    method, path, &self_ty,
+                                ));
                             }
                         }
                     }
@@ -1727,12 +2226,13 @@ fn run_flow_graph(args: FlowGraphArgs) -> anyhow::Result<()> {
             };
             parser.set_language(&language)?;
 
-            let tree = parser.parse(&text, None)
+            let tree = parser
+                .parse(&text, None)
                 .ok_or_else(|| anyhow!("Failed to parse TypeScript/JavaScript file"))?;
 
             let mut result = Vec::new();
             let source = text.as_bytes();
-            
+
             fn visit_node(
                 node: tree_sitter::Node,
                 source: &[u8],
@@ -1742,7 +2242,10 @@ fn run_flow_graph(args: FlowGraphArgs) -> anyhow::Result<()> {
                 result: &mut Vec<ControlFlowGraph>,
             ) {
                 match node.kind() {
-                    "function_declaration" | "function" | "arrow_function" | "method_definition" => {
+                    "function_declaration"
+                    | "function"
+                    | "arrow_function"
+                    | "method_definition" => {
                         // Check function name if target is specified
                         if let Some(target) = target_fn {
                             if let Some(name_node) = node.child_by_field_name("name") {
@@ -1765,8 +2268,15 @@ fn run_flow_graph(args: FlowGraphArgs) -> anyhow::Result<()> {
                     }
                 }
             }
-            
-            visit_node(tree.root_node(), source, path, is_ts, &args.r#fn, &mut result);
+
+            visit_node(
+                tree.root_node(),
+                source,
+                path,
+                is_ts,
+                &args.r#fn,
+                &mut result,
+            );
             result
         }
         "py" => {
@@ -1775,12 +2285,13 @@ fn run_flow_graph(args: FlowGraphArgs) -> anyhow::Result<()> {
             let language = tree_sitter_python::LANGUAGE.into();
             parser.set_language(&language)?;
 
-            let tree = parser.parse(&text, None)
+            let tree = parser
+                .parse(&text, None)
                 .ok_or_else(|| anyhow!("Failed to parse Python file"))?;
 
             let mut result = Vec::new();
             let source = text.as_bytes();
-            
+
             fn visit_node(
                 node: tree_sitter::Node,
                 source: &[u8],
@@ -1808,7 +2319,7 @@ fn run_flow_graph(args: FlowGraphArgs) -> anyhow::Result<()> {
                     }
                 }
             }
-            
+
             visit_node(tree.root_node(), source, path, &args.r#fn, &mut result);
             result
         }
@@ -1819,7 +2330,11 @@ fn run_flow_graph(args: FlowGraphArgs) -> anyhow::Result<()> {
 
     if cfgs.is_empty() {
         if let Some(ref target) = args.r#fn {
-            return Err(anyhow!("Function '{}' not found in {}", target, path.display()));
+            return Err(anyhow!(
+                "Function '{}' not found in {}",
+                target,
+                path.display()
+            ));
         } else {
             return Err(anyhow!("No functions found in {}", path.display()));
         }
@@ -1861,8 +2376,9 @@ fn run_flow_graph(args: FlowGraphArgs) -> anyhow::Result<()> {
     }
 
     let format = args.format.to_lowercase();
-    let items: Vec<CfgOutputItem> = cfgs.iter().map(|cfg| {
-        CfgOutputItem {
+    let items: Vec<CfgOutputItem> = cfgs
+        .iter()
+        .map(|cfg| CfgOutputItem {
             name: cfg.name.clone(),
             file: cfg.path.to_string_lossy().replace('\\', "/"),
             start_line: cfg.start_line,
@@ -1876,8 +2392,8 @@ fn run_flow_graph(args: FlowGraphArgs) -> anyhow::Result<()> {
             } else {
                 None
             },
-        }
-    }).collect();
+        })
+        .collect();
 
     let output = GraphOutput {
         cfgs: items,
@@ -1886,9 +2402,10 @@ fn run_flow_graph(args: FlowGraphArgs) -> anyhow::Result<()> {
 
     let output_str = if format == "mermaid" {
         // For mermaid, just output the diagram(s)
-        cfgs.iter().map(|cfg| {
-            format!("## {}\n\n```mermaid\n{}\n```\n", cfg.name, cfg.to_mermaid())
-        }).collect::<Vec<_>>().join("\n")
+        cfgs.iter()
+            .map(|cfg| format!("## {}\n\n```mermaid\n{}\n```\n", cfg.name, cfg.to_mermaid()))
+            .collect::<Vec<_>>()
+            .join("\n")
     } else {
         serde_json::to_string_pretty(&output)?
     };
@@ -2038,13 +2555,29 @@ fn run_flow_index(args: FlowIndexArgs) -> anyhow::Result<()> {
                                 class_stack.push(name);
                                 let mut cursor = node.walk();
                                 for child in node.children(&mut cursor) {
-                                    visit_node(child, source, file_abs, file_display, language, class_stack, items);
+                                    visit_node(
+                                        child,
+                                        source,
+                                        file_abs,
+                                        file_display,
+                                        language,
+                                        class_stack,
+                                        items,
+                                    );
                                 }
                                 class_stack.pop();
                             } else {
                                 let mut cursor = node.walk();
                                 for child in node.children(&mut cursor) {
-                                    visit_node(child, source, file_abs, file_display, language, class_stack, items);
+                                    visit_node(
+                                        child,
+                                        source,
+                                        file_abs,
+                                        file_display,
+                                        language,
+                                        class_stack,
+                                        items,
+                                    );
                                 }
                             }
                         }
@@ -2114,13 +2647,25 @@ fn run_flow_index(args: FlowIndexArgs) -> anyhow::Result<()> {
                         _ => {
                             let mut cursor = node.walk();
                             for child in node.children(&mut cursor) {
-                                visit_node(child, source, file_abs, file_display, language, class_stack, items);
+                                visit_node(
+                                    child,
+                                    source,
+                                    file_abs,
+                                    file_display,
+                                    language,
+                                    class_stack,
+                                    items,
+                                );
                             }
                         }
                     }
                 }
 
-                let lang = if is_ts { CfgLanguage::TypeScript } else { CfgLanguage::JavaScript };
+                let lang = if is_ts {
+                    CfgLanguage::TypeScript
+                } else {
+                    CfgLanguage::JavaScript
+                };
                 let mut class_stack: Vec<String> = Vec::new();
                 visit_node(
                     tree.root_node(),
@@ -2168,7 +2713,14 @@ fn run_flow_index(args: FlowIndexArgs) -> anyhow::Result<()> {
                                     class_stack.push(name);
                                     let mut cursor = node.walk();
                                     for child in node.children(&mut cursor) {
-                                        visit_node(child, source, file_abs, file_display, class_stack, items);
+                                        visit_node(
+                                            child,
+                                            source,
+                                            file_abs,
+                                            file_display,
+                                            class_stack,
+                                            items,
+                                        );
                                     }
                                     class_stack.pop();
                                     return;
@@ -2176,7 +2728,14 @@ fn run_flow_index(args: FlowIndexArgs) -> anyhow::Result<()> {
                             }
                             let mut cursor = node.walk();
                             for child in node.children(&mut cursor) {
-                                visit_node(child, source, file_abs, file_display, class_stack, items);
+                                visit_node(
+                                    child,
+                                    source,
+                                    file_abs,
+                                    file_display,
+                                    class_stack,
+                                    items,
+                                );
                             }
                         }
                         "function_definition" => {
@@ -2206,7 +2765,14 @@ fn run_flow_index(args: FlowIndexArgs) -> anyhow::Result<()> {
                         _ => {
                             let mut cursor = node.walk();
                             for child in node.children(&mut cursor) {
-                                visit_node(child, source, file_abs, file_display, class_stack, items);
+                                visit_node(
+                                    child,
+                                    source,
+                                    file_abs,
+                                    file_display,
+                                    class_stack,
+                                    items,
+                                );
                             }
                         }
                     }
@@ -2285,7 +2851,10 @@ fn flow_check_report(cfg: &Config, flows_dir: &Path) -> anyhow::Result<FlowCheck
         let issue = FlowSpecIssue {
             severity: IssueSeverity::Warning,
             field: None,
-            message: format!("No flow specs found in {} (flow specs are optional)", flows_dir.display()),
+            message: format!(
+                "No flow specs found in {} (flow specs are optional)",
+                flows_dir.display()
+            ),
         };
         warning_count += 1;
         files.push(FlowCheckFile {
@@ -2538,9 +3107,9 @@ enum BlueprintJsonlRecord<'a> {
 
 fn blueprint_to_jsonl(report: &BlueprintReport) -> anyhow::Result<String> {
     use std::collections::HashSet;
-    
+
     let mut out = String::new();
-    
+
     // Collect nodes with inbound edges
     let mut has_inbound: HashSet<&str> = HashSet::new();
     for edge in &report.edges {
@@ -2550,44 +3119,53 @@ fn blueprint_to_jsonl(report: &BlueprintReport) -> anyhow::Result<String> {
             }
         }
     }
-    
+
     // Output nodes
     for node in &report.nodes {
-        out.push_str(&serde_json::to_string(&BlueprintJsonlRecord::Node { node })?);
+        out.push_str(&serde_json::to_string(&BlueprintJsonlRecord::Node {
+            node,
+        })?);
         out.push('\n');
     }
-    
+
     // Output edges
     for edge in &report.edges {
-        out.push_str(&serde_json::to_string(&BlueprintJsonlRecord::Edge { edge })?);
+        out.push_str(&serde_json::to_string(&BlueprintJsonlRecord::Edge {
+            edge,
+        })?);
         out.push('\n');
     }
-    
+
     // Output orphans (files with no inbound edges - potential dead code or entry points)
     for node in &report.nodes {
         if !has_inbound.contains(node.path.as_str()) {
             out.push_str(&serde_json::to_string(&BlueprintJsonlRecord::Orphan {
                 path: &node.path,
-                language: serde_json::to_string(&node.language).unwrap_or_default().trim_matches('"').to_string(),
+                language: serde_json::to_string(&node.language)
+                    .unwrap_or_default()
+                    .trim_matches('"')
+                    .to_string(),
                 lines: node.lines,
                 reason: "no_inbound_edges",
             })?);
             out.push('\n');
         }
     }
-    
+
     // Output stats
     out.push_str(&serde_json::to_string(&BlueprintJsonlRecord::Stats {
         stats: &report.stats,
     })?);
     out.push('\n');
-    
+
     // Output errors
     for error in &report.errors {
-        out.push_str(&serde_json::to_string(&BlueprintJsonlRecord::Error { error })?);
+        out.push_str(&serde_json::to_string(&BlueprintJsonlRecord::Error {
+            error,
+        })?);
         out.push('\n');
     }
-    
+
     Ok(out)
 }
 
@@ -2728,31 +3306,30 @@ fn render_flow_proposal(flow_check: &Option<FlowCheckReport>, audit: &FlowAuditR
     for (category, items) in grouped {
         out.push_str(&format!("### {} ({})\n\n", category, items.len()));
         for finding in items {
-            let location = finding
-                .line
-                .map(|l| format!(":{}", l))
-                .unwrap_or_default();
-            
+            let location = finding.line.map(|l| format!(":{}", l)).unwrap_or_default();
+
             // Header with location
             out.push_str(&format!(
                 "#### [{:?}] `{}{}`\n\n",
-                finding.severity,
-                finding.path,
-                location,
+                finding.severity, finding.path, location,
             ));
-            
+
             // What: the problem
             out.push_str(&format!("**What**: {}\n\n", finding.message));
-            
+
             // Fix options (human-readable)
             if let Some(fix) = &finding.fix_instructions {
                 out.push_str("**Fix options**:\n");
-                out.push_str(&format!("1. **{}**: {}\n", capitalize_first(&fix.action), fix.description));
+                out.push_str(&format!(
+                    "1. **{}**: {}\n",
+                    capitalize_first(&fix.action),
+                    fix.description
+                ));
                 if let Some(alt) = &fix.alternative {
                     out.push_str(&format!("2. **Justify**: {}\n", alt));
                 }
                 out.push('\n');
-                
+
                 // Machine-readable JSON for AI agents
                 out.push_str("**For AI agents**:\n\n");
                 out.push_str("```json\n");
@@ -2769,7 +3346,7 @@ fn render_flow_proposal(flow_check: &Option<FlowCheckReport>, audit: &FlowAuditR
                 }
                 out.push_str("\n```\n\n");
             }
-            
+
             // Evidence
             if !finding.evidence.is_empty() {
                 out.push_str("**Evidence**:\n");
@@ -2778,7 +3355,7 @@ fn render_flow_proposal(flow_check: &Option<FlowCheckReport>, audit: &FlowAuditR
                 }
                 out.push('\n');
             }
-            
+
             out.push_str("---\n\n");
         }
     }
@@ -2791,13 +3368,17 @@ fn render_flow_proposal(flow_check: &Option<FlowCheckReport>, audit: &FlowAuditR
     out.push_str("### For AI agents (Claude/Codex)\n");
     out.push_str("1. Parse the JSON blocks for each finding\n");
     out.push_str("2. Apply the suggested `find`/`replace` patterns\n");
-    out.push_str("3. If justification is more appropriate, add to `flows/*.md` under `justifications:`\n\n");
+    out.push_str(
+        "3. If justification is more appropriate, add to `flows/*.md` under `justifications:`\n\n",
+    );
     out.push_str("### Justification reasons\n");
     out.push_str("- `variation`: The abstraction exists because implementations will differ\n");
     out.push_str("- `isolation`: The wrapper isolates callers from implementation changes\n");
     out.push_str("- `reuse`: The duplicated code is intentionally repeated (not DRY by design)\n");
     out.push_str("- `policy`: Business/security policy requires this structure\n");
-    out.push_str("- `volatility`: This code changes frequently; abstraction reduces blast radius\n");
+    out.push_str(
+        "- `volatility`: This code changes frequently; abstraction reduces blast radius\n",
+    );
     out
 }
 
@@ -3122,7 +3703,11 @@ fn print_organize_report(report: &OrganizationReport) {
         );
     }
 
-    println!("\n{}: {}", style("Files Scanned").bold(), report.files_scanned);
+    println!(
+        "\n{}: {}",
+        style("Files Scanned").bold(),
+        report.files_scanned
+    );
     println!(
         "{}: {}",
         style("Issues Found").bold(),
@@ -3147,8 +3732,10 @@ fn print_organize_report(report: &OrganizationReport) {
     println!("\n{}", style("Findings:").bold());
 
     // Group findings
-    let mut by_type: std::collections::BTreeMap<String, Vec<&dwg_core::organize::OrganizationFinding>> =
-        std::collections::BTreeMap::new();
+    let mut by_type: std::collections::BTreeMap<
+        String,
+        Vec<&dwg_core::organize::OrganizationFinding>,
+    > = std::collections::BTreeMap::new();
     for finding in &report.findings {
         let key = format!("{:?}", finding.issue);
         by_type.entry(key).or_default().push(finding);
@@ -3177,10 +3764,7 @@ fn print_organize_report(report: &OrganizationReport) {
             println!("    {} {} - {}", action, path_display, finding.reason);
 
             if let Some(target) = &finding.target_path {
-                println!(
-                    "      → {}",
-                    style(target.display()).dim()
-                );
+                println!("      → {}", style(target.display()).dim());
             }
         }
         if findings.len() > 10 {

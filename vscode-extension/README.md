@@ -1,118 +1,59 @@
-﻿# ToneGuard VS Code Extension
+# ToneGuard VS Code Extension
 
-**Zero-setup AI slop detection for Markdown.** Highlights generic, AI-style writing patterns instantly.
+ToneGuard flags common AI-style writing patterns in Markdown and text files. It also ships flow tooling (audit, blueprint, CFG) for code review.
 
-## Features
+## Quick start
 
-- **Zero Configuration Required** — Works immediately after install
-- **Bundled Language Server** — Pre-compiled binaries for Windows, macOS, and Linux
-- **Smart Defaults** — Built-in detection rules tuned for common AI writing patterns
-- **Quick Fixes** — One-click ignore for false positives
-- **Real-time Feedback** — Diagnostics update as you type
-- **Dashboard Sidebar** — Run audits, install skills, and browse findings from a dedicated ToneGuard panel
+1. Install the extension.
+2. Open a folder.
+3. Open the ToneGuard view (Activity Bar icon) and click **Run**.
 
-## Quick Start
+## What you get
 
-1. **Install from Marketplace** — Search "ToneGuard" in VS Code Extensions
-2. **Open any Markdown file** — Diagnostics appear automatically
-3. **That's it!** — No configuration needed
+- Live diagnostics for supported file types (Problems panel + inline squiggles)
+- Dashboard (Review, Findings, Organizer, Settings)
+- Flow Map (blueprint graph + clusters, function index, CFG viewer)
+- Optional skill installer (Cursor / Claude Code / Codex)
 
-## What It Detects
+## Configuration
 
-ToneGuard identifies common AI writing patterns:
+ToneGuard looks for a workspace config first (`layth-style.yml`, `.toneguard.yml`). If none exists, it uses the bundled defaults.
 
-| Category | Examples |
-|----------|----------|
-| **Buzzwords** | "leverage", "robust", "seamless", "cutting-edge" |
-| **Puffery** | "world-class", "industry-leading", "best-in-class" |
-| **Templates** | "In this article, we will...", "Let's dive in..." |
-| **Weasel Words** | "some experts say", "studies have shown" |
-| **Marketing Clichés** | "game-changer", "paradigm shift", "synergy" |
-| **Formatting Slop** | Emoji bullets, excessive bold, mid-sentence questions |
+Useful settings:
 
-## Configuration (Optional)
+- `dwg.configPath`: path to a custom config file
+- `dwg.profile`: force a profile for all files
+- `dwg.strict`: fail on warn-level density
+- `dwg.noRepoChecks`: skip repo-wide checks
+- `dwg.uiTheme`: theme for Dashboard + Flow Map
 
-ToneGuard works out of the box, but you can customize it:
+## Ignore controls
 
-### Workspace Config
+Inline ignore:
 
-Add a `layth-style.yml` to your project root for custom rules:
-
-```yaml
-# Example: Disable transition warnings
-limits:
-  transitions_per_section: 10
-  
-# Add project-specific whitelisted terms
-whitelist:
-  buzzwords:
-    - "kubernetes"  # Technical term, not slop
+```md
+This sentence uses marketing language. <!-- dwg:ignore-line -->
 ```
 
-### VS Code Settings
+Block ignore:
 
-| Setting | Description |
-|---------|-------------|
-| `dwg.configPath` | Path to custom config (defaults to workspace `layth-style.yml`) |
-| `dwg.cliCommand` | Path to ToneGuard CLI (`dwg`) for flow audits |
-| `dwg.profile` | Force a specific profile for all files |
-| `dwg.disableCategories` | Hide specific diagnostic categories |
-| `dwg.enableCategories` | Show additional categories |
-
-## Commands
-
-- **ToneGuard: Run Recommended Review** — Runs flow audit + generates a proposal (best first step)
-- **ToneGuard: Lint Workspace** — Refresh diagnostics for all open files
-- **ToneGuard: Flow Audit Workspace** — Run flow audit detectors and write a report
-- **ToneGuard: Generate Flow Proposal (Markdown)** — Create a reviewable Markdown artifact from flow checks + audit
-- **ToneGuard: New Flow Spec** — Scaffold a new flow spec file under `flows/`
-- **ToneGuard: Show Server Info** — Display active server and config paths
-- **ToneGuard: Install Logic Flow Guardrails Skill** — Install the flow guardrail prompt
-
-## Ignoring False Positives
-
-### Inline Ignore
-
-```markdown
-This sentence uses robust technology. <!-- dwg:ignore-line -->
-```
-
-### Block Ignore
-
-```markdown
+```md
 <!-- dwg:ignore buzzword, puffery -->
-This marketing content won't be flagged for buzzwords or puffery.
+This section is allowed to contain banned examples.
 <!-- dwg:end-ignore -->
 ```
 
-## CLI Usage
+## CLI usage
 
-For CI/CD or batch processing, install the CLI:
+If you want CI or batch runs:
 
 ```bash
-cargo install dwg-cli
+cargo install dwg-cli --force
 dwg-cli --config layth-style.yml --strict docs/
 ```
 
-## Requirements
+## Feedback
 
-- VS Code 1.86.0 or later
-- Windows (x64), macOS (Intel/Apple Silicon), or Linux (x64/arm64)
+Please visit my GitHub for feedback:
 
-## Troubleshooting
-
-| Issue | Solution |
-|-------|----------|
-| No diagnostics | Run "ToneGuard: Show Server Info" to check status |
-| Server not found | Extension includes bundled binary — reinstall if missing |
-| Custom config not loading | Check `dwg.configPath` setting and file existence |
-
-## License
-
-MIT License. See [LICENSE](https://github.com/editnori/toneguard/blob/main/LICENSE).
-
-## Links
-
-- [GitHub Repository](https://github.com/editnori/toneguard)
-- [Issue Tracker](https://github.com/editnori/toneguard/issues)
-- [Full Documentation](https://github.com/editnori/toneguard#readme)
+- https://github.com/editnori/toneguard/issues
