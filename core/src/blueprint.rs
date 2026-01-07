@@ -10,6 +10,176 @@ use walkdir::WalkDir;
 
 use crate::arch::Language;
 
+fn parse_toml_string_value(raw: &str) -> Option<String> {
+    let before_comment = raw.split('#').next().unwrap_or(raw).trim();
+    let eq = before_comment.find('=')?;
+    let mut value = before_comment[eq + 1..].trim();
+
+    if value.starts_with("r#\"") {
+        value = value.strip_prefix("r#\"")?;
+        let end = value.find("\"#")?;
+        return Some(value[..end].to_string());
+    }
+
+    let quote = value.chars().next()?;
+    if quote != '"' && quote != '\'' {
+        return None;
+    }
+    let tail = &value[quote.len_utf8()..];
+    let end = tail.find(quote)?;
+    Some(tail[..end].to_string())
+}
+
+fn toml_section_lines<'a>(text: &'a str, section: &str) -> Vec<&'a str> {
+    let mut out = Vec::new();
+    let mut in_section = false;
+    let header = format!("[{section}]");
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            in_section = trimmed == header;
+            continue;
+        }
+        if in_section {
+            out.push(line);
+        }
+    }
+    out
+}
+
+fn parse_manifest_name(text: &str) -> Option<String> {
+    for line in toml_section_lines(text, "package") {
+        let trimmed = line.trim();
+        if trimmed.starts_with("name") {
+            return parse_toml_string_value(trimmed);
+        }
+    }
+    None
+}
+
+fn parse_manifest_lib_name(text: &str) -> Option<String> {
+    for line in toml_section_lines(text, "lib") {
+        let trimmed = line.trim();
+        if trimmed.starts_with("name") {
+            return parse_toml_string_value(trimmed);
+        }
+    }
+    None
+}
+
+fn parse_manifest_crate_name(text: &str) -> Option<String> {
+    if let Some(name) = parse_manifest_lib_name(text) {
+        return Some(name);
+    }
+    parse_manifest_name(text).map(|name| name.replace('-', "_"))
+}
+
+fn parse_workspace_members(text: &str) -> Vec<String> {
+    let mut buf = String::new();
+    let mut started = false;
+
+    for line in toml_section_lines(text, "workspace") {
+        let trimmed = line.trim();
+        if trimmed.starts_with("members") {
+            started = true;
+            buf.push_str(trimmed);
+            buf.push('\n');
+            if trimmed.contains(']') {
+                break;
+            }
+            continue;
+        }
+        if started {
+            buf.push_str(trimmed);
+            buf.push('\n');
+            if trimmed.contains(']') {
+                break;
+            }
+        }
+    }
+
+    if buf.is_empty() {
+        return Vec::new();
+    }
+
+    let start = match buf.find('[') {
+        Some(idx) => idx,
+        None => return Vec::new(),
+    };
+    let end = match buf[start..].find(']') {
+        Some(idx) => start + idx,
+        None => return Vec::new(),
+    };
+    let inner = &buf[start + 1..end];
+
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_quote: Option<char> = None;
+
+    for ch in inner.chars() {
+        if let Some(q) = in_quote {
+            if ch == q {
+                out.push(cur.clone());
+                cur.clear();
+                in_quote = None;
+            } else {
+                cur.push(ch);
+            }
+            continue;
+        }
+        if ch == '"' || ch == '\'' {
+            in_quote = Some(ch);
+        }
+    }
+
+    out.into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+fn discover_workspace_crates(workspace_root: &Path) -> BTreeMap<String, PathBuf> {
+    let manifest = workspace_root.join("Cargo.toml");
+    let Ok(text) = std::fs::read_to_string(&manifest) else {
+        return BTreeMap::new();
+    };
+
+    let members = parse_workspace_members(&text);
+    let mut map = BTreeMap::new();
+
+    if members.is_empty() {
+        let Some(crate_name) = parse_manifest_crate_name(&text) else {
+            return map;
+        };
+        let start = if workspace_root.join("src").is_dir() {
+            workspace_root.join("src")
+        } else {
+            workspace_root.to_path_buf()
+        };
+        map.insert(crate_name, start);
+        return map;
+    }
+
+    for member in members {
+        let crate_root = workspace_root.join(member);
+        let manifest_path = crate_root.join("Cargo.toml");
+        let Ok(member_text) = std::fs::read_to_string(&manifest_path) else {
+            continue;
+        };
+        let Some(crate_name) = parse_manifest_crate_name(&member_text) else {
+            continue;
+        };
+        let start = if crate_root.join("src").is_dir() {
+            crate_root.join("src")
+        } else {
+            crate_root.clone()
+        };
+        map.insert(crate_name, start);
+    }
+
+    map
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlueprintConfig {
     pub ignore_globs: Vec<String>,
@@ -185,6 +355,7 @@ pub fn blueprint_paths(paths: &[PathBuf], config: &BlueprintConfig) -> Result<Bl
         .clone()
         .or_else(|| std::env::current_dir().ok());
     let workspace_root = base_dir.clone().unwrap_or_else(|| PathBuf::from("."));
+    let workspace_crates = discover_workspace_crates(&workspace_root);
 
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
@@ -234,7 +405,7 @@ pub fn blueprint_paths(paths: &[PathBuf], config: &BlueprintConfig) -> Result<Bl
             lines: line_count,
         });
 
-        let raw_edges = extract_edges(language, path, &content, &workspace_root);
+        let raw_edges = extract_edges(language, path, &content, &workspace_root, &workspace_crates);
         for raw in raw_edges {
             let mut resolved = false;
             let to_display = raw.to_path.as_ref().and_then(|p| {
@@ -299,9 +470,10 @@ fn extract_edges(
     from_path: &Path,
     content: &str,
     workspace_root: &Path,
+    workspace_crates: &BTreeMap<String, PathBuf>,
 ) -> Vec<RawEdge> {
     match language {
-        Language::Rust => extract_rust_edges(from_path, content, workspace_root),
+        Language::Rust => extract_rust_edges(from_path, content, workspace_root, workspace_crates),
         Language::TypeScript | Language::JavaScript => extract_js_edges(from_path, content),
         Language::Python => extract_python_edges(from_path, content),
     }
@@ -440,7 +612,12 @@ fn resolve_python_relative(from_path: &Path, dots: &str, module: &str) -> Option
     None
 }
 
-fn extract_rust_edges(from_path: &Path, content: &str, workspace_root: &Path) -> Vec<RawEdge> {
+fn extract_rust_edges(
+    from_path: &Path,
+    content: &str,
+    workspace_root: &Path,
+    workspace_crates: &BTreeMap<String, PathBuf>,
+) -> Vec<RawEdge> {
     static RE_MOD: Lazy<Regex> =
         Lazy::new(|| Regex::new(r#"^\s*(?:pub\s+)?mod\s+([A-Za-z0-9_]+)\s*;\s*$"#).unwrap());
 
@@ -464,7 +641,12 @@ fn extract_rust_edges(from_path: &Path, content: &str, workspace_root: &Path) ->
         });
     }
 
-    edges.extend(extract_rust_use_edges(from_path, content, workspace_root));
+    edges.extend(extract_rust_use_edges(
+        from_path,
+        content,
+        workspace_root,
+        workspace_crates,
+    ));
 
     edges
 }
@@ -482,7 +664,12 @@ fn resolve_rust_mod_decl(from_path: &Path, name: &str) -> Option<PathBuf> {
     None
 }
 
-fn extract_rust_use_edges(from_path: &Path, content: &str, workspace_root: &Path) -> Vec<RawEdge> {
+fn extract_rust_use_edges(
+    from_path: &Path,
+    content: &str,
+    workspace_root: &Path,
+    workspace_crates: &BTreeMap<String, PathBuf>,
+) -> Vec<RawEdge> {
     let mut edges = Vec::new();
     let mut stmt = String::new();
     let mut stmt_line: Option<u32> = None;
@@ -498,7 +685,13 @@ fn extract_rust_use_edges(from_path: &Path, content: &str, workspace_root: &Path
             stmt.push_str(trimmed);
             stmt.push('\n');
             if trimmed.contains(';') {
-                edges.extend(process_rust_use_stmt(from_path, &stmt, stmt_line, workspace_root));
+                edges.extend(process_rust_use_stmt(
+                    from_path,
+                    &stmt,
+                    stmt_line,
+                    workspace_root,
+                    workspace_crates,
+                ));
                 stmt.clear();
                 stmt_line = None;
             }
@@ -510,7 +703,13 @@ fn extract_rust_use_edges(from_path: &Path, content: &str, workspace_root: &Path
             stmt.push_str(trimmed);
             stmt.push('\n');
             if trimmed.contains(';') {
-                edges.extend(process_rust_use_stmt(from_path, &stmt, stmt_line, workspace_root));
+                edges.extend(process_rust_use_stmt(
+                    from_path,
+                    &stmt,
+                    stmt_line,
+                    workspace_root,
+                    workspace_crates,
+                ));
                 stmt.clear();
                 stmt_line = None;
             }
@@ -525,6 +724,7 @@ fn process_rust_use_stmt(
     stmt: &str,
     line: Option<u32>,
     workspace_root: &Path,
+    workspace_crates: &BTreeMap<String, PathBuf>,
 ) -> Vec<RawEdge> {
     let mut expr = stmt.trim().to_string();
     if expr.starts_with("pub use ") {
@@ -545,7 +745,7 @@ fn process_rust_use_stmt(
     let targets = expand_rust_use_targets(expr);
     let mut edges = Vec::new();
     for target in targets {
-        let resolved = resolve_rust_use_target(from_path, &target, workspace_root);
+        let resolved = resolve_rust_use_target(from_path, &target, workspace_root, workspace_crates);
         edges.push(RawEdge {
             to_path: resolved,
             to_raw: target,
@@ -656,18 +856,37 @@ fn expand_rust_use_targets(expr: &str) -> Vec<String> {
     out
 }
 
-fn resolve_rust_use_target(from_path: &Path, target: &str, workspace_root: &Path) -> Option<PathBuf> {
+fn resolve_rust_root_file(start: &Path) -> Option<PathBuf> {
+    let lib = start.join("lib.rs");
+    if lib.is_file() {
+        return Some(lib);
+    }
+    let main = start.join("main.rs");
+    if main.is_file() {
+        return Some(main);
+    }
+    None
+}
+
+fn resolve_rust_use_target(
+    from_path: &Path,
+    target: &str,
+    workspace_root: &Path,
+    workspace_crates: &BTreeMap<String, PathBuf>,
+) -> Option<PathBuf> {
     let target = target.trim().trim_start_matches("::");
     if target.is_empty() {
         return None;
     }
 
-    let (start, mut segments) = parse_rust_module_start(from_path, target, workspace_root)?;
+    let (start, mut segments) =
+        parse_rust_module_start(from_path, target, workspace_root, workspace_crates)?;
     if segments.is_empty() {
-        return None;
+        return resolve_rust_root_file(&start);
     }
 
     // Try longest prefix first, then back off.
+    let start_dir = start.clone();
     while !segments.is_empty() {
         let rel = segments.join("/");
         let base = start.join(rel);
@@ -681,13 +900,14 @@ fn resolve_rust_use_target(from_path: &Path, target: &str, workspace_root: &Path
         }
         segments.pop();
     }
-    None
+    resolve_rust_root_file(&start_dir)
 }
 
 fn parse_rust_module_start(
     from_path: &Path,
     target: &str,
     workspace_root: &Path,
+    workspace_crates: &BTreeMap<String, PathBuf>,
 ) -> Option<(PathBuf, Vec<String>)> {
     let from_dir = from_path.parent().unwrap_or_else(|| Path::new("."));
     if let Some(rest) = target.strip_prefix("crate::") {
@@ -716,6 +936,15 @@ fn parse_rust_module_start(
         }
         let segments = split_rust_segments(rest);
         return Some((start, segments));
+    }
+
+    if let Some((prefix, rest)) = target.split_once("::") {
+        if let Some(start) = workspace_crates.get(prefix) {
+            let segments = split_rust_segments(rest);
+            return Some((start.clone(), segments));
+        }
+    } else if let Some(start) = workspace_crates.get(target) {
+        return Some((start.clone(), Vec::new()));
     }
     None
 }
