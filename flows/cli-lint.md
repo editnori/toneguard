@@ -24,8 +24,7 @@ steps:
   - "Run repo hygiene checks"
   - "Collect files by path and profile"
   - "Analyze documents"
-  - "Compute density and totals"
-  - "Emit human or JSON report"
+  - "Compute totals and emit report"
   - "Exit non-zero on strict threshold"
 invariants:
   - "If --strict and density >= warn threshold, exit code is non-zero"

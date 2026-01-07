@@ -1,198 +1,117 @@
 # ToneGuard
-ToneGuard keeps team docs grounded in plain language. It spots the marketing fluff and rigid transitions that slip into Markdown or text files after heavy editing.
+
+ToneGuard keeps docs grounded in plain language and gives you artifacts for code review. It works as a CLI and a VS Code extension.
 
 ## Overview
-ToneGuard scans Markdown and plain-text documentation for hallmarks of AI-authored prose. It flags puffery, buzzwords, stiff transitions, and template conclusions while keeping Layth's direct voice intact.
 
-The workspace ships a Rust analysis core, a CLI for local or CI runs, and a VS Code extension that reuses the CLI for live diagnostics.
+ToneGuard scans Markdown/text for AI-style writing patterns and structural slop. It also ships flow tools (audit, proposal, blueprint, CFG) so you can review logic changes with concrete outputs.
 
-## Components
-ToneGuard is organised as a Cargo workspace with the following packages:
+What you get:
 
-- `core/`: deterministic parser and rule engine.
-- `cli/`: dwg CLI wrapper for local runs and CI pipelines.
-- `vscode-extension/`: VS Code extension that shells out to the CLI.
-- `layth-style.yml`: default rule set tuned for this repository.
-
-Each crate shares a single version and configuration so updates stay consistent.
+- Writing lint (categories + per-glob profiles)
+- Repo checks (lockfiles, suspicious names, large JSON, stray temp files)
+- Flow guardrails (flow specs, audits, proposal artifacts)
+- Blueprint graph (repo-wide file dependency map)
+- Blueprint diff (refactor guard: require a mapping for removed files)
+- Function index + CFG output (JSON or Mermaid)
+- Dashboard + Flow Map UI in VS Code
 
 ## Quickstart
-Copy-paste friendly steps for getting ToneGuard running everywhere:
 
-1. Install the CLI globally (run from any directory):
+Start by adding a config file to the repo root (`layth-style.yml` or `.toneguard.yml`). Then run the CLI or use the extension Dashboard to generate reports under `reports/`.
 
-   ```bash
-   cargo install dwg-cli --force
-   dwg-cli --version
-   ```
+### Command line
 
-2. Lint any repository (no need to clone ToneGuard):
-
-   ```bash
-   cd path/to/your/project
-   dwg-cli --config layth-style.yml --strict .
-   ```
-
-   If the repo doesn't already have a config, copy `layth-style.yml` from this project or point `--config` at a shared copy.
-
-3. Install the VS Code extension once:
-
-   - Download the latest `toneguard-*.vsix` from the releases page (or build it yourself, see **Extension**).
-   - Open VS Code > Extensions > Install from VSIX... and pick the file.
-   - The extension shells out to the globally installed `dwg-cli`, so every workspace is ready to lint.
-
-Keep a copy of `layth-style.yml` in each repo (or set `dwg.configPath` to a shared location) so both the CLI and the extension load the rules you expect.
-
-## CLI command reference
-Common invocations you can drop into any repository:
-
-- Full lint with repo hygiene:\
-  `dwg-cli --config layth-style.yml --strict .`
-- Quiet JSON output (pipe into jq or CI tooling):\
-  `dwg-cli --config layth-style.yml --json --strict .`
-- Focus on a single profile or path:\
-  `dwg-cli --profile readme README.md`
-- Enable / disable categories on the fly:\
-  `dwg-cli --only structure,marketing docs/README.md`\
-  `dwg-cli --disable transition,buzzword notes/*.md`
-- Skip repo checks when you only care about document lint:\
-  `dwg-cli --no-repo-checks ./docs`
-- Comment hygiene mode (report):\
-  `dwg-cli comments src/ --config layth-style.yml`
-- Comment hygiene mode (strip eligible comments):\
-  `dwg-cli comments src/ --config layth-style.yml --strip`
-- Flow spec validation (guardrail contracts):\
-  `dwg-cli flow check --config layth-style.yml`
-- Flow audit (entropy detectors + flow checks):\
-  `dwg-cli flow audit --config layth-style.yml --out reports/flow-audit.json .`
-- Flow proposal (reviewable Markdown artifact):\
-  `dwg-cli flow propose --config layth-style.yml --out reports/flow-proposal.md .`
-- Flow blueprint (repo-wide dependency graph):\
-  `dwg-cli flow blueprint --config layth-style.yml --out reports/flow-blueprint.json .`
-- Flow blueprint diff (refactor protector):\
-  `dwg-cli flow blueprint diff --before reports/flow-blueprint.before.json --after reports/flow-blueprint.after.json --md --out reports/flow-blueprint-diff.md`
-- New flow spec (artifact-first scaffolding):\
-  `dwg-cli flow new --config layth-style.yml --name "..." --entrypoint "..."`
-
-## Dependencies
-Install the following tools before building. They match the workspace's tested toolchain:
-- Rust 1.75+ for the workspace.
-- [Bun](https://bun.sh) (recommended) or Node.js 18+ for the VS Code extension build.
-- `@vscode/vsce` when packaging a VSIX.
-
-## Configuration
-Override behaviour through `layth-style.yml`. Each section targets a specific area.
-
-### Style safeguards
-These keys throttle phrasing that sounds inflated. Adjust them when a document needs to allow a specific term:
-- `buzzwords.throttle`: throttles marketing-heavy verbs and adjectives.
-- `transitions.throttle`: limits formal connectors such as "however".
-- `puffery.ban` and `marketing_cliches.ban`: block stock promotional copy.
-
-### Structural controls
-These settings enforce shape and hygiene:
-- `profile_defaults`: sets baseline limits for sentence length and cadence checks.
-- `profiles`: applies per-glob overrides for README files and other templates such as RFCs or tickets.
-- `repo_rules`: runs a hygiene sweep covering ignore globs, duplicate lockfiles, suspicious filenames, and oversized JSON or YAML.
-- `comment_policy`: enforces optional ratios for TODO and FIXME comments with allow and ignore globs.
-
-Wrap verbatim text with the dwg comment fence (HTML comments named `dwg:off` and `dwg:on`) when a section must bypass the lint.
-
-## Repo hygiene
-Repo checks run before document linting and surface deterministic issues:
-
-- banned directories or files such as `__pycache__/`, `.idea/`, or `.DS_Store`
-- duplicate lockfiles (`package-lock.json` next to `yarn.lock`)
-- oversized structured files outside fixture folders
-- slop paths that resemble `copy`, `final`, or similar variants
-
-Adjust the ignore and allow lists in `layth-style.yml` if your project needs exemptions.
-
-## CLI flags
-Common combinations:
-
-```bash
-dwg-cli --profile readme --only structure,marketing README.md
-dwg-cli --disable transition,buzzword docs/
-dwg-cli --no-repo-checks --only-repo stray-markdown,dup-variants .
-```
-
-Additional options include:
-- `--set key=value` for ad-hoc overrides such as `profile_defaults.min_sentences_per_section=2`.
-- `--enable` and `--disable` to toggle categories without editing the config.
-- Repo-level flags help focus the hygiene sweep. Use `--only-repo` to restrict categories and `--disable-repo` when you want a quiet pass.
-
-## Running tests
-Use the standard workspace commands:
-
-```bash
-cargo fmt
-cargo test
-cd vscode-extension && bun install && bun run compile
-```
-
-## Extension
-Build the VS Code extension after installing dependencies:
-
-```bash
-cd vscode-extension
-bun install
-bun run compile
-bunx @vscode/vsce package
-```
-
-Install the resulting `toneguard-<version>.vsix` via "Extensions: Install from VSIX...".
-
-## CI usage
+Install the CLI and run it on a repo. Use `--json` when you want a report file, and `--strict` in CI.
 
 ```bash
 cargo install dwg-cli --force
-dwg-cli --strict docs/
+dwg-cli --config layth-style.yml --json . > reports/markdown-lint.json
 ```
 
-Use `--strict` in CI to enforce non-zero exits when densities cross the warning threshold.
+You can scope runs with `--profile`, or toggle categories with `--only`, `--enable`, and `--disable`. If you only want document diagnostics (no repo checks), pass `--no-repo-checks`.
 
-## Comment hygiene
-ToneGuard can audit and strip code comments when needed:
+### Extension
 
-```bash
-dwg-cli comments src/ --config layth-style.yml
-dwg-cli comments --strip src/
-```
-
-Tune ratios and allow lists through `comment_policy` before running destructive operations.
-
-## Flow guardrails
-ToneGuard can enforce logic flow guardrails across codebases:
-
-- Define flow specs in `flows/*.md` (YAML frontmatter + narrative body).
-- Validate flow specs: `dwg-cli flow check`
-- Audit code for pass-through wrappers, lonely abstractions, and placeholders:
-  `dwg-cli flow audit --out reports/flow-audit.json .`
-- Generate a reviewable Markdown artifact:
-  `dwg-cli flow propose --out reports/flow-proposal.md .`
-- Build a repo-wide dependency blueprint:
-  `dwg-cli flow blueprint --out reports/flow-blueprint.json .`
-- Compare two blueprint snapshots:
-  `dwg-cli flow blueprint diff --before reports/flow-blueprint.before.json --after reports/flow-blueprint.after.json --md --out reports/flow-blueprint-diff.md`
-- Write a mapping template for removed files:
-  `dwg-cli flow blueprint diff --before reports/flow-blueprint.before.json --after reports/flow-blueprint.after.json --write-mapping reports/flow-blueprint-mapping.yml`
-- Require a mapping for deletions/moves:
-  `dwg-cli flow blueprint diff --before reports/flow-blueprint.before.json --after reports/flow-blueprint.after.json --require-mapping reports/flow-blueprint-mapping.yml`
-- Scaffold a new flow spec artifact:
-  `dwg-cli flow new --name "..." --entrypoint "..."`
-
-See `flows/` in this repo for templates.
-
-## Local one-click install
-Build and bundle the CLI + LSP + VSIX for the current platform:
+Build a VSIX and install it locally. The extension bundles `dwg-lsp` and `dwg` for your OS/arch by default.
 
 ```bash
 ./scripts/install-local.sh
 ```
 
+Open the ToneGuard view, click **Run**, then review the files written to `reports/`.
+
+### Flow tools
+
+Flow tools create review artifacts for code changes. They are separate from writing lint.
+
+```bash
+dwg-cli flow audit --config layth-style.yml --out reports/flow-audit.json .
+dwg-cli flow propose --config layth-style.yml --out reports/flow-proposal.md .
+dwg-cli flow blueprint --config layth-style.yml --out reports/flow-blueprint.json .
+dwg-cli flow index --config layth-style.yml --out reports/flow-index.json .
+```
+
+To generate a CFG (JSON + optional Mermaid), run:
+
+```bash
+dwg-cli flow graph --file path/to/file.rs --fn my_fn --with-logic --include-mermaid --out reports/cfg.json
+```
+
+To use blueprint diff as a refactor guard:
+
+```bash
+dwg-cli flow blueprint --out reports/flow-blueprint.before.json .
+dwg-cli flow blueprint --out reports/flow-blueprint.after.json .
+dwg-cli flow blueprint diff --before reports/flow-blueprint.before.json --after reports/flow-blueprint.after.json --write-mapping reports/flow-blueprint-mapping.yml
+dwg-cli flow blueprint diff --before reports/flow-blueprint.before.json --after reports/flow-blueprint.after.json --require-mapping reports/flow-blueprint-mapping.yml
+```
+
+### Organizer
+
+Organizer helps keep one-off scripts/data/output from leaking into the repo root. It can also generate a cleanup prompt for Cursor/Claude/Codex.
+
+```bash
+dwg-cli organize --config layth-style.yml --json --out reports/organization-report.json .
+```
+
+To generate a prompt instead of a report, pass `--prompt-for cursor` (or `claude`, `codex`).
+
+## Dependencies
+
+The Rust workspace uses Cargo. The VS Code extension build uses Bun.
+
+- Rust 1.75+ (workspace build and tests)
+- Bun (extension build), plus `@vscode/vsce` for packaging
+
+## Configuration
+
+`layth-style.yml` controls what gets scanned and what is ignored. The same config is used by the CLI, the LSP server, and the extension reports.
+
+Key sections:
+
+- `file_types`: which file types are linted
+- `repo_rules.ignore_globs`: ignore paths (including `reports/**` to avoid lint loops)
+- `profiles`: per-glob tuning (README vs docs vs notes)
+- `flow_rules`: flow spec settings and audit ignore globs
+- `organize_rules`: what counts as data/scripts/legacy files
+
+This repo ignores `docs/**` and `examples/**` by default because they contain intentional bad examples. In a normal repo you probably want to remove those ignore globs.
+
+## Running tests
+
+Run the Rust tests from the repo root. For extension changes, run Bun lint and compile.
+
+```bash
+cargo fmt
+cargo test --workspace
+cd vscode-extension && bun install && bun run lint && bun run compile
+```
+
 ## License
-ToneGuard is licensed under the MIT License. See `LICENSE` for full terms. The MIT terms allow commercial and open-source redistribution so long as you include the original copyright and license text.
+
+MIT. See `LICENSE` for the full text.
 
 ## Contributing
-Open an issue or submit a pull request with a focused change set. Run the linters and tests before sending patches.
+
+Open an issue or submit a focused PR. For feedback, use GitHub Issues: https://github.com/editnori/toneguard/issues

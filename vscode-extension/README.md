@@ -15,6 +15,16 @@ ToneGuard flags common AI-style writing patterns in Markdown and text files. It 
 - Flow Map (blueprint graph + clusters, function index, CFG viewer)
 - Optional skill installer (Cursor / Claude Code / Codex)
 
+## Reports
+
+The recommended review writes files under `reports/`:
+
+- `reports/markdown-lint.json`
+- `reports/flow-audit.json`
+- `reports/flow-proposal.md`
+- `reports/flow-index.json` (best-effort)
+- `reports/flow-blueprint.json` (best-effort)
+
 ## Configuration
 
 ToneGuard looks for a workspace config first (`layth-style.yml`, `.toneguard.yml`). If none exists, it uses the bundled defaults.
@@ -26,6 +36,15 @@ Useful settings:
 - `dwg.strict`: fail on warn-level density
 - `dwg.noRepoChecks`: skip repo-wide checks
 - `dwg.uiTheme`: theme for Dashboard + Flow Map
+
+## Commands
+
+Open the Command Palette and run:
+
+- `ToneGuard: Run Recommended Review`
+- `ToneGuard: Open Flow Map`
+- `ToneGuard: Flow Audit Workspace`
+- `ToneGuard: Generate Flow Proposal (Markdown)`
 
 ## Ignore controls
 

@@ -933,9 +933,10 @@ fn run_repo_checks(
             let resolved = if path.is_dir() {
                 path.clone()
             } else {
-                path.parent()
-                    .map(|p| p.to_path_buf())
-                    .unwrap_or_else(|| config_root.to_path_buf())
+                match path.parent() {
+                    Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+                    _ => config_root.to_path_buf(),
+                }
             };
             bases.insert(resolved);
         }
@@ -1088,7 +1089,8 @@ fn run_repo_checks(
                             || fname == "contributing.md"
                             || fname == "code_of_conduct.md"
                             || fname == "security.md"
-                            || fname == "changelog.md";
+                            || fname == "changelog.md"
+                            || fname == "agents.md";
                         let looks_ai = fname.contains("claude")
                             || fname.contains("chatgpt")
                             || fname.contains("copilot")
@@ -1810,10 +1812,6 @@ fn jaccard(a: &BTreeSet<String>, b: &BTreeSet<String>) -> f32 {
     }
 }
 
-fn basename(path: &str) -> &str {
-    path.rsplit('/').next().unwrap_or(path)
-}
-
 fn build_neighbors(
     edges: &BTreeSet<BlueprintResolvedEdgeKey>,
 ) -> (
@@ -1943,13 +1941,13 @@ fn run_flow_blueprint_diff(args: FlowBlueprintDiffArgs) -> anyhow::Result<()> {
     for old in &nodes_removed {
         let out_old = before_out.get(old).cloned().unwrap_or_default();
         let in_old = before_in.get(old).cloned().unwrap_or_default();
-        let base_old = basename(old);
+        let base_old = old.rsplit('/').next().unwrap_or(old.as_str());
 
         let mut scored: Vec<BlueprintRenameCandidate> = Vec::new();
         for new_path in &nodes_added {
             let out_new = after_out.get(new_path).cloned().unwrap_or_default();
             let in_new = after_in.get(new_path).cloned().unwrap_or_default();
-            let base_new = basename(new_path);
+            let base_new = new_path.rsplit('/').next().unwrap_or(new_path.as_str());
 
             let mut score = 0.65 * jaccard(&out_old, &out_new) + 0.35 * jaccard(&in_old, &in_new);
             if base_old == base_new {
