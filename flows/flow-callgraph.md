@@ -8,10 +8,11 @@ inputs:
   - "max calls per function"
   - "resolved-only toggle"
 outputs:
-  - "call graph report (function nodes + call edges)"
+  - "call graph report (function/method nodes + call edges)"
+  - "hub/orphan/sink/source stats"
   - "optional JSON/JSONL file"
 side_effects:
-  - "reads Rust source files"
+  - "reads Rust/TS/JS/Py source files"
   - "writes report when --out is provided"
 failure_modes:
   - "unsupported format -> error"
@@ -22,14 +23,16 @@ observability:
   - "optional output file"
 steps:
   - "Load config"
-  - "Collect Rust files (respect ignore globs)"
-  - "Index functions and impl methods"
+  - "Collect code files (respect ignore globs)"
+  - "Index functions and methods"
   - "Extract call sites per function body"
   - "Resolve calls to unique targets when possible"
+  - "Compute degree stats (hubs/orphans/sinks/sources)"
   - "Write report"
 invariants:
   - "Output is deterministic for the same repo state"
   - "Every resolved edge points to an existing node"
+  - "Calls only resolve when the target is unique"
   - "Parse errors do not abort the entire run"
 indirection_budget: 5
 justifications:
@@ -44,5 +47,5 @@ owners:
 language: "rust"
 ---
 
-Flow call graph builds a function-level call graph for Rust files.
+Flow call graph builds a function-level call graph for Rust, TypeScript/JavaScript, and Python.
 It resolves edges conservatively (only when the callee maps to a unique target).

@@ -386,7 +386,10 @@ impl DataFlowGraph {
             // Check if this flow goes from parameter to unwrap
             if flow.from.kind == DefKind::Parameter {
                 for transform in &flow.transformations {
-                    if matches!(transform.kind, TransformKind::Unwrap | TransformKind::Expect) {
+                    if matches!(
+                        transform.kind,
+                        TransformKind::Unwrap | TransformKind::Expect
+                    ) {
                         unwraps.push(UncheckedUnwrap {
                             parameter: flow.variable.clone(),
                             unwrap_line: transform.line,
@@ -458,7 +461,7 @@ pub fn build_dfg_rust(item_fn: &syn::ItemFn, path: &Path) -> DataFlowGraph {
             if let syn::Pat::Ident(pat_ident) = pat_type.pat.as_ref() {
                 let param_name = pat_ident.ident.to_string();
                 let line = pat_ident.ident.span().start().line as u32;
-                
+
                 dfg.add_parameter(Parameter {
                     name: param_name,
                     param_type: Some(quote::ToTokens::to_token_stream(&pat_type.ty).to_string()),
@@ -506,19 +509,22 @@ impl<'a> RustDfgVisitor<'a> {
 
     fn visit_local(&mut self, local: &syn::Local) {
         use quote::ToTokens;
-        
+
         let line = local.let_token.span.start().line as u32;
-        
+
         // Extract pattern (variable names)
         let vars = extract_pattern_vars(&local.pat);
-        
+
         for var in vars {
             self.dfg.add_definition(DefSite {
                 variable: var,
                 line,
                 column: None,
                 kind: DefKind::Declaration,
-                value_expr: local.init.as_ref().map(|i| i.expr.to_token_stream().to_string()),
+                value_expr: local
+                    .init
+                    .as_ref()
+                    .map(|i| i.expr.to_token_stream().to_string()),
                 is_conditional: false,
             });
         }
@@ -530,8 +536,8 @@ impl<'a> RustDfgVisitor<'a> {
     }
 
     fn visit_expr(&mut self, expr: &syn::Expr, in_condition: bool) {
-        use syn::Expr;
         use quote::ToTokens;
+        use syn::Expr;
 
         match expr {
             Expr::Path(path) => {
@@ -539,15 +545,22 @@ impl<'a> RustDfgVisitor<'a> {
                 let name = path.to_token_stream().to_string();
                 if !name.contains("::") {
                     // Likely a local variable
-                    let line = path.path.segments.first()
+                    let line = path
+                        .path
+                        .segments
+                        .first()
                         .map(|s| s.ident.span().start().line as u32)
                         .unwrap_or(0);
-                    
+
                     self.dfg.add_usage(UseSite {
                         variable: name,
                         line,
                         column: None,
-                        kind: if in_condition { UseKind::Condition } else { UseKind::Read },
+                        kind: if in_condition {
+                            UseKind::Condition
+                        } else {
+                            UseKind::Read
+                        },
                         context: None,
                     });
                 }
@@ -556,7 +569,7 @@ impl<'a> RustDfgVisitor<'a> {
                 // Assignment
                 let line = assign.eq_token.span.start().line as u32;
                 let left = assign.left.to_token_stream().to_string();
-                
+
                 self.dfg.add_definition(DefSite {
                     variable: left,
                     line,
@@ -565,7 +578,7 @@ impl<'a> RustDfgVisitor<'a> {
                     value_expr: Some(assign.right.to_token_stream().to_string()),
                     is_conditional: false,
                 });
-                
+
                 self.visit_expr(&assign.right, false);
             }
             Expr::Binary(binary) => {
@@ -581,12 +594,12 @@ impl<'a> RustDfgVisitor<'a> {
             Expr::MethodCall(method) => {
                 let method_name = method.method.to_string();
                 self.visit_expr(&method.receiver, false);
-                
+
                 // Track unwrap/expect calls
                 if method_name == "unwrap" || method_name == "expect" {
                     // This is tracked in flow analysis
                 }
-                
+
                 for arg in &method.args {
                     self.visit_expr(arg, false);
                 }
@@ -629,17 +642,23 @@ impl<'a> RustDfgVisitor<'a> {
 
     fn visit_macro(&mut self, stmt_macro: &syn::StmtMacro) {
         use quote::ToTokens;
-        
+
         let mac_path = stmt_macro.mac.path.to_token_stream().to_string();
         let line = stmt_macro.mac.path.span().start().line as u32;
-        
+
         // Check for assert macros
         if mac_path.starts_with("assert") || mac_path.starts_with("debug_assert") {
             // Variables in assertions are condition usages
             let tokens = stmt_macro.mac.tokens.to_string();
             // Simple heuristic: find identifiers in the assertion
             for word in tokens.split(|c: char| !c.is_alphanumeric() && c != '_') {
-                if !word.is_empty() && word.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false) {
+                if !word.is_empty()
+                    && word
+                        .chars()
+                        .next()
+                        .map(|c| c.is_alphabetic())
+                        .unwrap_or(false)
+                {
                     self.dfg.add_usage(UseSite {
                         variable: word.to_string(),
                         line,
@@ -655,7 +674,7 @@ impl<'a> RustDfgVisitor<'a> {
 
 fn extract_pattern_vars(pat: &syn::Pat) -> Vec<String> {
     use syn::Pat;
-    
+
     let mut vars = Vec::new();
     match pat {
         Pat::Ident(ident) => {
@@ -682,9 +701,9 @@ fn extract_pattern_vars(pat: &syn::Pat) -> Vec<String> {
 }
 
 fn extract_expr_vars(expr: &syn::Expr) -> Vec<String> {
-    use syn::Expr;
     use quote::ToTokens;
-    
+    use syn::Expr;
+
     let mut vars = Vec::new();
     match expr {
         Expr::Path(path) => {
@@ -723,7 +742,7 @@ mod tests {
     #[test]
     fn test_dfg_basic() {
         let mut dfg = DataFlowGraph::new("test".to_string(), PathBuf::from("test.rs"));
-        
+
         dfg.add_parameter(Parameter {
             name: "x".to_string(),
             param_type: Some("i32".to_string()),
@@ -731,7 +750,7 @@ mod tests {
             has_default: false,
             is_optional: false,
         });
-        
+
         dfg.add_usage(UseSite {
             variable: "x".to_string(),
             line: 2,
@@ -739,9 +758,9 @@ mod tests {
             kind: UseKind::Read,
             context: None,
         });
-        
+
         dfg.build_flows();
-        
+
         assert_eq!(dfg.parameters.len(), 1);
         assert_eq!(dfg.flows.len(), 1);
     }
@@ -749,7 +768,7 @@ mod tests {
     #[test]
     fn test_dfg_escalation() {
         let mut dfg = DataFlowGraph::new("test".to_string(), PathBuf::from("test.rs"));
-        
+
         dfg.add_definition(DefSite {
             variable: "count".to_string(),
             line: 1,
@@ -758,7 +777,7 @@ mod tests {
             value_expr: Some("0".to_string()),
             is_conditional: false,
         });
-        
+
         dfg.add_usage(UseSite {
             variable: "count".to_string(),
             line: 2,
@@ -766,7 +785,7 @@ mod tests {
             kind: UseKind::Read,
             context: Some("warning_count".to_string()),
         });
-        
+
         dfg.add_usage(UseSite {
             variable: "count".to_string(),
             line: 3,
@@ -774,7 +793,7 @@ mod tests {
             kind: UseKind::Read,
             context: Some("error_count".to_string()),
         });
-        
+
         let escalations = dfg.find_error_escalation();
         assert_eq!(escalations.len(), 1);
     }

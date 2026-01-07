@@ -63,6 +63,10 @@ type CallgraphNode = {
     file_display: string;
     start_line: number;
     kind: string;
+    language?: string;
+    in_calls?: number;
+    out_calls?: number;
+    total_calls?: number;
 };
 
 type CallgraphEdge = {
@@ -82,6 +86,11 @@ type CallgraphReport = {
         nodes: number;
         edges: number;
         edges_resolved: number;
+        orphan_nodes?: number;
+        sink_nodes?: number;
+        source_nodes?: number;
+        by_language?: Record<string, number>;
+        top_hubs?: { id: string; display_name: string; total_calls: number }[];
     };
     errors: { path: string; message: string }[];
 };
@@ -93,6 +102,9 @@ type CfgItem = {
     language: string;
     nodes: number;
     edges: number;
+    exits: number[];
+    unreachable: number;
+    mermaid?: string | null;
 };
 
 type GraphData = {
@@ -369,7 +381,7 @@ function CallgraphList({
                     active={selectedId === it.id}
                     onClick={() => onSelect(it.id)}
                 >
-                    <span className="text-muted mr-1">{it.kind}</span>
+                    <span className="text-muted mr-1">{it.language ?? 'code'}</span>
                     {it.display_name} · {it.file_display}:{it.start_line}
                 </ListItem>
             ))}
@@ -564,6 +576,106 @@ function FindingsPanel({ findings }: { findings: GraphData['logic_findings'] }) 
     );
 }
 
+function CfgViewer({
+    cfgs,
+    selectedName,
+    onSelect,
+}: {
+    cfgs: CfgItem[];
+    selectedName: string;
+    onSelect: (name: string) => void;
+}) {
+    const selected = cfgs.find((c) => c.name === selectedName) ?? cfgs[0];
+    if (!selected) {
+        return (
+            <div className="flex items-center justify-center h-full text-[11px] text-muted">
+                No CFG data
+            </div>
+        );
+    }
+
+    const hasMermaid = typeof selected.mermaid === 'string' && selected.mermaid.trim().length > 0;
+
+    return (
+        <div className="h-full flex flex-col">
+            <div className="px-2 py-2 border-b border-border">
+                <Row justify="between" gap="xs" className="flex-wrap">
+                    <div className="min-w-[140px]">
+                        <div className="text-[11px] font-semibold truncate">{selected.name}</div>
+                        <div className="text-[10px] text-muted truncate">
+                            {selected.language} · {selected.nodes} nodes · {selected.edges} edges · {selected.unreachable} unreachable
+                        </div>
+                    </div>
+                    <Row gap="xs" className="flex-wrap">
+                        {cfgs.length > 1 && (
+                            <Select
+                                value={selected.name}
+                                onChange={(e) => onSelect((e.target as HTMLSelectElement).value)}
+                            >
+                                {cfgs.slice(0, 50).map((cfg) => (
+                                    <option key={cfg.name} value={cfg.name}>
+                                        {cfg.name}
+                                    </option>
+                                ))}
+                            </Select>
+                        )}
+                        <Button
+                            size="sm"
+                            onClick={() =>
+                                vscode.postMessage({
+                                    command: 'openFile',
+                                    file: selected.file,
+                                    line: selected.start_line,
+                                })
+                            }
+                        >
+                            Open
+                        </Button>
+                        <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() =>
+                                vscode.postMessage({
+                                    command: 'copyText',
+                                    text: JSON.stringify(selected, null, 2),
+                                    label: 'CFG JSON',
+                                })
+                            }
+                        >
+                            Copy JSON
+                        </Button>
+                        <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={!hasMermaid}
+                            onClick={() =>
+                                vscode.postMessage({
+                                    command: 'copyText',
+                                    text: selected.mermaid ?? '',
+                                    label: 'Mermaid',
+                                })
+                            }
+                        >
+                            Copy Mermaid
+                        </Button>
+                    </Row>
+                </Row>
+            </div>
+            <div className="p-2 overflow-auto flex-1">
+                {hasMermaid ? (
+                    <pre className="text-[10px] leading-snug whitespace-pre rounded border border-border bg-bg px-2 py-2 overflow-auto">
+                        {selected.mermaid}
+                    </pre>
+                ) : (
+                    <div className="text-[11px] text-muted">
+                        Mermaid output not available for this function.
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
 // Main App
 function App() {
     const initialUi = getWebviewState<UiState>({
@@ -588,6 +700,7 @@ function App() {
     const blueprintData = useSignal<BlueprintReport | null>(null);
     const callgraphData = useSignal<CallgraphReport | null>(null);
     const graphData = useSignal<GraphData | null>(null);
+    const selectedCfg = useSignal('');
     
     const selectedPath = useSignal('');
     const selectedFile = useSignal('');
@@ -642,6 +755,16 @@ function App() {
                 selectedFn.value = msg.functionName ?? '';
                 mode.value = 'functions';
                 error.value = null;
+
+                const cfgs = Array.isArray((msg.data as any)?.cfgs) ? (msg.data as any).cfgs : [];
+                if (cfgs.length > 0) {
+                    const requested = typeof msg.functionName === 'string' ? msg.functionName : '';
+                    const exact = requested ? cfgs.find((c: any) => c?.name === requested) : undefined;
+                    const chosen = exact ?? cfgs[0];
+                    selectedCfg.value = chosen?.name ?? '';
+                } else {
+                    selectedCfg.value = '';
+                }
             }
             if (msg.type === 'callgraphData') {
                 callgraphData.value = msg.data as CallgraphReport;
@@ -700,7 +823,7 @@ function App() {
             .map((n) => ({
                 id: n.id,
                 label: n.display_name,
-                language: 'rust',
+                language: n.language ?? 'code',
             }));
         const graphEdges: GraphEdge[] = edges
             .filter((e) => e.to)
@@ -1082,6 +1205,12 @@ function App() {
                                 theme={theme.value === 'maple-light' ? 'light' : 'dark'}
                                 className="rounded"
                             />
+                        ) : mode.value === 'functions' && graphData.value && (graphData.value.cfgs?.length ?? 0) > 0 ? (
+                            <CfgViewer
+                                cfgs={graphData.value.cfgs}
+                                selectedName={selectedCfg.value}
+                                onSelect={(name) => (selectedCfg.value = name)}
+                            />
                         ) : error.value ? (
                             <div className="flex items-center justify-center h-full text-[11px] text-danger">
                                 {error.value}
@@ -1090,7 +1219,9 @@ function App() {
                             <div className="flex items-center justify-center h-full text-[11px] text-muted">
                                 {mode.value === 'calls'
                                     ? 'Run Calls to visualize a function neighborhood'
-                                    : 'Run Blueprint to visualize file dependencies'}
+                                    : mode.value === 'functions'
+                                        ? 'Index the workspace, then select a function to load its CFG'
+                                        : 'Run Blueprint to visualize file dependencies'}
                             </div>
                         )}
                     </Card>

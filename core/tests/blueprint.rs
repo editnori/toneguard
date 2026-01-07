@@ -130,4 +130,3 @@ fn main() {
         "expected dwg_core::cfg::* to resolve to core/src/cfg.rs"
     );
 }
-

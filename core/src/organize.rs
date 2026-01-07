@@ -263,11 +263,7 @@ pub fn detect_repo_type(root: &Path) -> RepoType {
         .max_depth(2)
         .into_iter()
         .filter_map(|e| e.ok())
-        .any(|e| {
-            e.path()
-                .extension()
-                .map_or(false, |ext| ext == "ipynb")
-        });
+        .any(|e| e.path().extension().map_or(false, |ext| ext == "ipynb"));
 
     if has_pyproject || has_setup {
         if kind == RepoKind::Mixed {
@@ -316,11 +312,7 @@ pub fn detect_repo_type(root: &Path) -> RepoType {
         if has_turbo {
             indicators.push("turbo.json".into());
         }
-        expected = vec![
-            "packages/".into(),
-            "apps/".into(),
-            "libs/".into(),
-        ];
+        expected = vec!["packages/".into(), "apps/".into(), "libs/".into()];
     }
 
     // Check for Rust workspace
@@ -379,9 +371,7 @@ fn is_legacy_file(filename: &str, patterns: &[String]) -> Option<String> {
 
         // Handle *_v[0-9]* pattern
         if pat_lower.contains("[0-9]") {
-            let re_pattern = pat_lower
-                .replace("*", ".*")
-                .replace("[0-9]", "[0-9]");
+            let re_pattern = pat_lower.replace("*", ".*").replace("[0-9]", "[0-9]");
             if let Ok(re) = regex::Regex::new(&format!("^{}$", re_pattern)) {
                 if re.is_match(&lower) {
                     return Some(format!("matches pattern: {}", pattern));
@@ -486,7 +476,10 @@ fn build_glob_set(patterns: &[String]) -> Option<GlobSet> {
 }
 
 /// Analyze a repository for organizational issues.
-pub fn analyze_organization(root: &Path, config: &OrganizeConfig) -> anyhow::Result<OrganizationReport> {
+pub fn analyze_organization(
+    root: &Path,
+    config: &OrganizeConfig,
+) -> anyhow::Result<OrganizationReport> {
     let repo_type = detect_repo_type(root);
     let mut findings = Vec::new();
     let mut files_scanned = 0;
@@ -606,10 +599,9 @@ pub fn analyze_organization(root: &Path, config: &OrganizeConfig) -> anyhow::Res
 
         // Check for scripts in wrong directories (e.g., Python scripts in ui/)
         if script_exts.contains(&extension) {
-            let in_expected = config
-                .script_directories
-                .iter()
-                .any(|d| relative.starts_with(d) || relative.to_string_lossy().contains(&format!("/{}/", d)));
+            let in_expected = config.script_directories.iter().any(|d| {
+                relative.starts_with(d) || relative.to_string_lossy().contains(&format!("/{}/", d))
+            });
 
             // Check if this is in a "wrong" directory for scripts
             let in_ui = relative.to_string_lossy().contains("ui/")
@@ -767,14 +759,8 @@ pub fn generate_organize_prompt(report: &OrganizationReport, agent: &str) -> Str
                         prompt.push_str(&format!("rm \"{}\"\n", finding.path.display()));
                     }
                     Action::Gitignore => {
-                        let target = finding
-                            .target_path
-                            .as_ref()
-                            .unwrap_or(&finding.path);
-                        prompt.push_str(&format!(
-                            "echo \"{}\" >> .gitignore\n",
-                            target.display()
-                        ));
+                        let target = finding.target_path.as_ref().unwrap_or(&finding.path);
+                        prompt.push_str(&format!("echo \"{}\" >> .gitignore\n", target.display()));
                     }
                 }
             }
@@ -793,11 +779,7 @@ mod tests {
 
     #[test]
     fn test_is_legacy_file() {
-        let patterns = vec![
-            "*_v[0-9]*".into(),
-            "*_old*".into(),
-            "*.bak".into(),
-        ];
+        let patterns = vec!["*_v[0-9]*".into(), "*_old*".into(), "*.bak".into()];
 
         assert!(is_legacy_file("file_v1.py", &patterns).is_some());
         assert!(is_legacy_file("file_v2.txt", &patterns).is_some());

@@ -140,7 +140,8 @@ impl CoverageData {
             if let Some(path_str) = line.strip_prefix("SF:") {
                 // Start of new file
                 if let Some(prev_file) = current_file.take() {
-                    data.files.insert(prev_file, std::mem::take(&mut current_coverage));
+                    data.files
+                        .insert(prev_file, std::mem::take(&mut current_coverage));
                 }
                 current_file = Some(PathBuf::from(path_str));
             } else if line.starts_with("DA:") {
@@ -163,7 +164,9 @@ impl CoverageData {
                 if let Some(rest) = line.strip_prefix("FN:") {
                     let parts: Vec<&str> = rest.splitn(2, ',').collect();
                     if parts.len() >= 2 {
-                        current_coverage.functions_found.insert(parts[1].to_string());
+                        current_coverage
+                            .functions_found
+                            .insert(parts[1].to_string());
                     }
                 }
             } else if line.starts_with("FNDA:") {
@@ -192,7 +195,8 @@ impl CoverageData {
             } else if line == "end_of_record" {
                 // End of current file record
                 if let Some(prev_file) = current_file.take() {
-                    data.files.insert(prev_file, std::mem::take(&mut current_coverage));
+                    data.files
+                        .insert(prev_file, std::mem::take(&mut current_coverage));
                 }
             }
         }
@@ -215,8 +219,8 @@ impl CoverageData {
 
         // Istanbul format is a JSON object where keys are file paths
         // and values contain statement/branch/function coverage
-        let parsed: serde_json::Value = serde_json::from_str(&content)
-            .with_context(|| "Failed to parse Istanbul JSON")?;
+        let parsed: serde_json::Value =
+            serde_json::from_str(&content).with_context(|| "Failed to parse Istanbul JSON")?;
 
         if let Some(obj) = parsed.as_object() {
             for (file_path, file_data) in obj {
@@ -312,13 +316,14 @@ impl CoverageData {
 
         for line in content.lines() {
             let line = line.trim();
-            
+
             // Look for <class filename="...">
             if line.contains("<class") && line.contains("filename=") {
                 if let Some(prev_file) = current_file.take() {
-                    data.files.insert(prev_file, std::mem::take(&mut current_coverage));
+                    data.files
+                        .insert(prev_file, std::mem::take(&mut current_coverage));
                 }
-                
+
                 // Extract filename
                 if let Some(start) = line.find("filename=\"") {
                     let rest = &line[start + 10..];
@@ -327,26 +332,26 @@ impl CoverageData {
                     }
                 }
             }
-            
+
             // Look for <line number="X" hits="Y"/>
             if line.contains("<line") && line.contains("number=") && line.contains("hits=") {
                 let mut line_num = None;
                 let mut hits = None;
-                
+
                 if let Some(start) = line.find("number=\"") {
                     let rest = &line[start + 8..];
                     if let Some(end) = rest.find('"') {
                         line_num = rest[..end].parse::<u32>().ok();
                     }
                 }
-                
+
                 if let Some(start) = line.find("hits=\"") {
                     let rest = &line[start + 6..];
                     if let Some(end) = rest.find('"') {
                         hits = rest[..end].parse::<u32>().ok();
                     }
                 }
-                
+
                 if let (Some(ln), Some(h)) = (line_num, hits) {
                     current_coverage.lines_found.insert(ln);
                     if h > 0 {
@@ -385,12 +390,14 @@ impl CoverageData {
 
     /// Check if a specific line in a file is covered
     pub fn is_line_covered(&self, path: &Path, line: u32) -> Option<bool> {
-        self.get_file_coverage(path).map(|c| c.is_line_covered(line))
+        self.get_file_coverage(path)
+            .map(|c| c.is_line_covered(line))
     }
 
     /// Check if a specific function is covered
     pub fn is_function_covered(&self, path: &Path, name: &str) -> Option<bool> {
-        self.get_file_coverage(path).map(|c| c.is_function_covered(name))
+        self.get_file_coverage(path)
+            .map(|c| c.is_function_covered(name))
     }
 
     /// Get overall coverage statistics
@@ -481,14 +488,17 @@ LH:2
 LF:3
 end_of_record
 "#;
-        
+
         let temp_dir = std::env::temp_dir();
         let temp_file = temp_dir.join("test_lcov.info");
         std::fs::write(&temp_file, lcov_content).unwrap();
 
         let coverage = CoverageData::parse_lcov(&temp_file).unwrap();
-        
-        let file_cov = coverage.files.get(&PathBuf::from("/path/to/file.ts")).unwrap();
+
+        let file_cov = coverage
+            .files
+            .get(&PathBuf::from("/path/to/file.ts"))
+            .unwrap();
         assert!(file_cov.is_line_covered(1));
         assert!(file_cov.is_line_covered(2));
         assert!(!file_cov.is_line_covered(3));

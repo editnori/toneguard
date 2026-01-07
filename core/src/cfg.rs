@@ -207,7 +207,13 @@ impl ControlFlowGraph {
     }
 
     /// Add an edge between nodes
-    pub fn add_edge(&mut self, from: NodeId, to: NodeId, kind: EdgeKind, condition: Option<String>) {
+    pub fn add_edge(
+        &mut self,
+        from: NodeId,
+        to: NodeId,
+        kind: EdgeKind,
+        condition: Option<String>,
+    ) {
         self.edges.push(CfgEdge {
             from,
             to,
@@ -385,7 +391,9 @@ impl ControlFlowGraph {
         for node in &self.nodes {
             let label = match &node.kind {
                 NodeKind::Entry => "Entry".to_string(),
-                NodeKind::Block => format!("Block L{}-{}", node.source_range.0, node.source_range.1),
+                NodeKind::Block => {
+                    format!("Block L{}-{}", node.source_range.0, node.source_range.1)
+                }
                 NodeKind::If => format!("If L{}", node.source_range.0),
                 NodeKind::Match => format!("Match L{}", node.source_range.0),
                 NodeKind::Loop => format!("Loop L{}", node.source_range.0),
@@ -555,13 +563,8 @@ pub struct ProjectCfgStats {
 pub fn build_cfg_rust(item_fn: &syn::ItemFn, path: &Path) -> ControlFlowGraph {
     let name = item_fn.sig.ident.to_string();
     let start_line = item_fn.sig.ident.span().start().line as u32;
-    
-    let mut cfg = ControlFlowGraph::new(
-        name,
-        path.to_path_buf(),
-        start_line,
-        CfgLanguage::Rust,
-    );
+
+    let mut cfg = ControlFlowGraph::new(name, path.to_path_buf(), start_line, CfgLanguage::Rust);
 
     let mut builder = RustCfgBuilder::new(&mut cfg);
     builder.visit_block(&item_fn.block);
@@ -573,17 +576,16 @@ pub fn build_cfg_rust(item_fn: &syn::ItemFn, path: &Path) -> ControlFlowGraph {
 }
 
 /// Build CFG from a Rust method in an impl block
-pub fn build_cfg_rust_method(method: &syn::ImplItemFn, path: &Path, self_ty: &str) -> ControlFlowGraph {
+pub fn build_cfg_rust_method(
+    method: &syn::ImplItemFn,
+    path: &Path,
+    self_ty: &str,
+) -> ControlFlowGraph {
     let fn_name = method.sig.ident.to_string();
     let name = format!("{}::{}", self_ty, fn_name);
     let start_line = method.sig.ident.span().start().line as u32;
 
-    let mut cfg = ControlFlowGraph::new(
-        name,
-        path.to_path_buf(),
-        start_line,
-        CfgLanguage::Rust,
-    );
+    let mut cfg = ControlFlowGraph::new(name, path.to_path_buf(), start_line, CfgLanguage::Rust);
 
     let mut builder = RustCfgBuilder::new(&mut cfg);
     builder.visit_block(&method.block);
@@ -624,7 +626,7 @@ impl<'a> RustCfgBuilder<'a> {
 
     fn visit_block(&mut self, block: &syn::Block) {
         use syn::Stmt;
-        
+
         for stmt in &block.stmts {
             match stmt {
                 Stmt::Local(local) => self.visit_local(local),
@@ -637,13 +639,13 @@ impl<'a> RustCfgBuilder<'a> {
 
     fn visit_local(&mut self, local: &syn::Local) {
         use quote::ToTokens;
-        
+
         let line = local.let_token.span.start().line as u32;
-        
+
         // Extract pattern (variable name)
         let pat_str = local.pat.to_token_stream().to_string();
         let mut identifiers = vec![pat_str.clone()];
-        
+
         // Extract identifiers from init expression
         if let Some(init) = &local.init {
             self.extract_identifiers(&init.expr, &mut identifiers);
@@ -661,8 +663,8 @@ impl<'a> RustCfgBuilder<'a> {
     }
 
     fn visit_expr(&mut self, expr: &syn::Expr) {
-        use syn::Expr;
         use quote::ToTokens;
+        use syn::Expr;
 
         match expr {
             Expr::If(expr_if) => self.visit_if(expr_if),
@@ -677,15 +679,17 @@ impl<'a> RustCfgBuilder<'a> {
             Expr::Call(call) => {
                 let line = call.func.span().start().line as u32;
                 let func_name = call.func.to_token_stream().to_string();
-                
+
                 // Check for diverging/exit functions
                 if is_rust_exit_call(&func_name) {
                     let exit_node = self.cfg.add_node(NodeKind::Exit, (line, line));
-                    self.cfg.add_edge(self.current_node, exit_node, EdgeKind::Fallthrough, None);
+                    self.cfg
+                        .add_edge(self.current_node, exit_node, EdgeKind::Fallthrough, None);
                     self.current_node = exit_node;
                 } else if is_rust_panic_call(&func_name) {
                     let panic_node = self.cfg.add_node(NodeKind::Panic, (line, line));
-                    self.cfg.add_edge(self.current_node, panic_node, EdgeKind::Fallthrough, None);
+                    self.cfg
+                        .add_edge(self.current_node, panic_node, EdgeKind::Fallthrough, None);
                     self.current_node = panic_node;
                 } else {
                     let mut identifiers = vec![func_name.clone()];
@@ -706,7 +710,7 @@ impl<'a> RustCfgBuilder<'a> {
             Expr::MethodCall(method) => {
                 let line = method.method.span().start().line as u32;
                 let method_name = method.method.to_string();
-                
+
                 let mut identifiers = vec![method_name.clone()];
                 self.extract_identifiers(&method.receiver, &mut identifiers);
                 for arg in &method.args {
@@ -756,13 +760,14 @@ impl<'a> RustCfgBuilder<'a> {
 
     fn visit_if(&mut self, expr_if: &syn::ExprIf) {
         use quote::ToTokens;
-        
+
         let line = expr_if.if_token.span.start().line as u32;
         let cond_str = expr_if.cond.to_token_stream().to_string();
 
         // Create If node
         let if_node = self.cfg.add_node(NodeKind::If, (line, line));
-        self.cfg.add_edge(self.current_node, if_node, EdgeKind::Fallthrough, None);
+        self.cfg
+            .add_edge(self.current_node, if_node, EdgeKind::Fallthrough, None);
 
         // Create merge node (may become unreachable if both branches exit)
         let end_line = get_block_end_line(&expr_if.then_branch);
@@ -774,32 +779,41 @@ impl<'a> RustCfgBuilder<'a> {
 
         // True branch
         let true_block = self.cfg.add_node(NodeKind::Block, (line + 1, line + 1));
-        self.cfg.add_edge(if_node, true_block, EdgeKind::TrueBranch, Some(cond_str.clone()));
-        
+        self.cfg.add_edge(
+            if_node,
+            true_block,
+            EdgeKind::TrueBranch,
+            Some(cond_str.clone()),
+        );
+
         self.current_node = true_block;
         self.visit_block(&expr_if.then_branch);
-        
+
         // Connect to merge if not already exited
         if !self.is_exit_node(self.current_node) {
-            self.cfg.add_edge(self.current_node, merge_node, EdgeKind::Fallthrough, None);
+            self.cfg
+                .add_edge(self.current_node, merge_node, EdgeKind::Fallthrough, None);
             true_reaches_merge = true;
         }
 
         // False branch
         if let Some((_, else_branch)) = &expr_if.else_branch {
             let false_block = self.cfg.add_node(NodeKind::Block, (line + 1, line + 1));
-            self.cfg.add_edge(if_node, false_block, EdgeKind::FalseBranch, Some(cond_str));
-            
+            self.cfg
+                .add_edge(if_node, false_block, EdgeKind::FalseBranch, Some(cond_str));
+
             self.current_node = false_block;
             self.visit_expr(else_branch);
-            
+
             if !self.is_exit_node(self.current_node) {
-                self.cfg.add_edge(self.current_node, merge_node, EdgeKind::Fallthrough, None);
+                self.cfg
+                    .add_edge(self.current_node, merge_node, EdgeKind::Fallthrough, None);
                 false_reaches_merge = true;
             }
         } else {
             // No else - false branch goes directly to merge
-            self.cfg.add_edge(if_node, merge_node, EdgeKind::FalseBranch, Some(cond_str));
+            self.cfg
+                .add_edge(if_node, merge_node, EdgeKind::FalseBranch, Some(cond_str));
             false_reaches_merge = true;
         }
 
@@ -814,12 +828,13 @@ impl<'a> RustCfgBuilder<'a> {
 
     fn visit_match(&mut self, expr_match: &syn::ExprMatch) {
         use quote::ToTokens;
-        
+
         let line = expr_match.match_token.span.start().line as u32;
         let _scrutinee = expr_match.expr.to_token_stream().to_string();
 
         let match_node = self.cfg.add_node(NodeKind::Match, (line, line));
-        self.cfg.add_edge(self.current_node, match_node, EdgeKind::Fallthrough, None);
+        self.cfg
+            .add_edge(self.current_node, match_node, EdgeKind::Fallthrough, None);
 
         // Create merge node
         let merge_node = self.cfg.add_node(NodeKind::Block, (line, line));
@@ -827,15 +842,17 @@ impl<'a> RustCfgBuilder<'a> {
         for arm in &expr_match.arms {
             let pat_str = arm.pat.to_token_stream().to_string();
             let arm_line = arm.pat.span().start().line as u32;
-            
+
             let arm_block = self.cfg.add_node(NodeKind::Block, (arm_line, arm_line));
-            self.cfg.add_edge(match_node, arm_block, EdgeKind::MatchArm, Some(pat_str));
-            
+            self.cfg
+                .add_edge(match_node, arm_block, EdgeKind::MatchArm, Some(pat_str));
+
             self.current_node = arm_block;
             self.visit_expr(&arm.body);
-            
+
             if !self.is_exit_node(self.current_node) {
-                self.cfg.add_edge(self.current_node, merge_node, EdgeKind::Fallthrough, None);
+                self.cfg
+                    .add_edge(self.current_node, merge_node, EdgeKind::Fallthrough, None);
             }
         }
 
@@ -844,9 +861,10 @@ impl<'a> RustCfgBuilder<'a> {
 
     fn visit_loop(&mut self, expr_loop: &syn::ExprLoop) {
         let line = expr_loop.loop_token.span.start().line as u32;
-        
+
         let header = self.cfg.add_node(NodeKind::Loop, (line, line));
-        self.cfg.add_edge(self.current_node, header, EdgeKind::Fallthrough, None);
+        self.cfg
+            .add_edge(self.current_node, header, EdgeKind::Fallthrough, None);
 
         let body = self.cfg.add_node(NodeKind::Block, (line + 1, line + 1));
         self.cfg.add_edge(header, body, EdgeKind::Fallthrough, None);
@@ -856,54 +874,65 @@ impl<'a> RustCfgBuilder<'a> {
         self.loop_stack.push((header, exit));
         self.current_node = body;
         self.visit_block(&expr_loop.body);
-        
+
         if !self.is_exit_node(self.current_node) {
-            self.cfg.add_edge(self.current_node, header, EdgeKind::LoopBack, None);
+            self.cfg
+                .add_edge(self.current_node, header, EdgeKind::LoopBack, None);
         }
-        
+
         self.loop_stack.pop();
         self.current_node = exit;
     }
 
     fn visit_while(&mut self, expr_while: &syn::ExprWhile) {
         use quote::ToTokens;
-        
+
         let line = expr_while.while_token.span.start().line as u32;
         let cond = expr_while.cond.to_token_stream().to_string();
-        
+
         let header = self.cfg.add_node(NodeKind::Loop, (line, line));
-        self.cfg.add_edge(self.current_node, header, EdgeKind::Fallthrough, None);
+        self.cfg
+            .add_edge(self.current_node, header, EdgeKind::Fallthrough, None);
 
         let body = self.cfg.add_node(NodeKind::Block, (line + 1, line + 1));
-        self.cfg.add_edge(header, body, EdgeKind::TrueBranch, Some(cond.clone()));
+        self.cfg
+            .add_edge(header, body, EdgeKind::TrueBranch, Some(cond.clone()));
 
         let exit = self.cfg.add_node(NodeKind::Block, (line, line));
-        self.cfg.add_edge(header, exit, EdgeKind::LoopExit, Some(format!("!{}", cond)));
+        self.cfg
+            .add_edge(header, exit, EdgeKind::LoopExit, Some(format!("!{}", cond)));
 
         self.loop_stack.push((header, exit));
         self.current_node = body;
         self.visit_block(&expr_while.body);
-        
+
         if !self.is_exit_node(self.current_node) {
-            self.cfg.add_edge(self.current_node, header, EdgeKind::LoopBack, None);
+            self.cfg
+                .add_edge(self.current_node, header, EdgeKind::LoopBack, None);
         }
-        
+
         self.loop_stack.pop();
         self.current_node = exit;
     }
 
     fn visit_for(&mut self, expr_for: &syn::ExprForLoop) {
         use quote::ToTokens;
-        
+
         let line = expr_for.for_token.span.start().line as u32;
         let pat = expr_for.pat.to_token_stream().to_string();
         let iter = expr_for.expr.to_token_stream().to_string();
-        
+
         let header = self.cfg.add_node(NodeKind::Loop, (line, line));
-        self.cfg.add_edge(self.current_node, header, EdgeKind::Fallthrough, None);
+        self.cfg
+            .add_edge(self.current_node, header, EdgeKind::Fallthrough, None);
 
         let body = self.cfg.add_node(NodeKind::Block, (line + 1, line + 1));
-        self.cfg.add_edge(header, body, EdgeKind::TrueBranch, Some(format!("{} in {}", pat, iter)));
+        self.cfg.add_edge(
+            header,
+            body,
+            EdgeKind::TrueBranch,
+            Some(format!("{} in {}", pat, iter)),
+        );
 
         let exit = self.cfg.add_node(NodeKind::Block, (line, line));
         self.cfg.add_edge(header, exit, EdgeKind::LoopExit, None);
@@ -911,11 +940,12 @@ impl<'a> RustCfgBuilder<'a> {
         self.loop_stack.push((header, exit));
         self.current_node = body;
         self.visit_block(&expr_for.body);
-        
+
         if !self.is_exit_node(self.current_node) {
-            self.cfg.add_edge(self.current_node, header, EdgeKind::LoopBack, None);
+            self.cfg
+                .add_edge(self.current_node, header, EdgeKind::LoopBack, None);
         }
-        
+
         self.loop_stack.pop();
         self.current_node = exit;
     }
@@ -937,13 +967,14 @@ impl<'a> RustCfgBuilder<'a> {
 
     fn visit_macro(&mut self, stmt_macro: &syn::StmtMacro) {
         use quote::ToTokens;
-        
+
         let mac_path = stmt_macro.mac.path.to_token_stream().to_string();
         let line = stmt_macro.mac.path.span().start().line as u32;
-        
+
         if is_rust_panic_macro(&mac_path) {
             let panic_node = self.cfg.add_node(NodeKind::Panic, (line, line));
-            self.cfg.add_edge(self.current_node, panic_node, EdgeKind::Fallthrough, None);
+            self.cfg
+                .add_edge(self.current_node, panic_node, EdgeKind::Fallthrough, None);
             self.current_node = panic_node;
         } else if is_rust_assert_macro(&mac_path) {
             let stmt = Statement {
@@ -970,7 +1001,11 @@ impl<'a> RustCfgBuilder<'a> {
         if let Some(node) = self.cfg.nodes.get(node_id as usize) {
             matches!(
                 node.kind,
-                NodeKind::Return | NodeKind::Exit | NodeKind::Panic | NodeKind::Break | NodeKind::Continue
+                NodeKind::Return
+                    | NodeKind::Exit
+                    | NodeKind::Panic
+                    | NodeKind::Break
+                    | NodeKind::Continue
             )
         } else {
             false
@@ -987,8 +1022,8 @@ impl<'a> RustCfgBuilder<'a> {
     }
 
     fn extract_identifiers(&self, expr: &syn::Expr, identifiers: &mut Vec<String>) {
-        use syn::Expr;
         use quote::ToTokens;
+        use syn::Expr;
 
         match expr {
             Expr::Path(path) => {
@@ -1022,9 +1057,7 @@ impl<'a> RustCfgBuilder<'a> {
 }
 
 fn is_rust_exit_call(func: &str) -> bool {
-    func.contains("std::process::exit")
-        || func.contains("process::exit")
-        || func == "exit"
+    func.contains("std::process::exit") || func.contains("process::exit") || func == "exit"
 }
 
 fn is_rust_panic_call(func: &str) -> bool {
@@ -1035,20 +1068,16 @@ fn is_rust_panic_call(func: &str) -> bool {
 }
 
 fn is_rust_panic_macro(mac: &str) -> bool {
-    mac == "panic"
-        || mac == "unreachable"
-        || mac == "unimplemented"
-        || mac == "todo"
+    mac == "panic" || mac == "unreachable" || mac == "unimplemented" || mac == "todo"
 }
 
 fn is_rust_assert_macro(mac: &str) -> bool {
-    mac.starts_with("assert")
-        || mac.starts_with("debug_assert")
+    mac.starts_with("assert") || mac.starts_with("debug_assert")
 }
 
 fn get_expr_start_line(expr: &syn::Expr) -> u32 {
-    use syn::Expr;
     use proc_macro2::Span;
+    use syn::Expr;
 
     fn span_start(span: Span) -> u32 {
         span.start().line as u32
@@ -1068,7 +1097,12 @@ fn get_expr_start_line(expr: &syn::Expr) -> u32 {
         Expr::Loop(e) => span_start(e.loop_token.span),
         Expr::Match(e) => span_start(e.match_token.span),
         Expr::MethodCall(e) => get_expr_start_line(&e.receiver),
-        Expr::Path(e) => e.path.segments.first().map(|s| span_start(s.ident.span())).unwrap_or(0),
+        Expr::Path(e) => e
+            .path
+            .segments
+            .first()
+            .map(|s| span_start(s.ident.span()))
+            .unwrap_or(0),
         Expr::Return(e) => span_start(e.return_token.span),
         Expr::While(e) => span_start(e.while_token.span),
         _ => 0,
@@ -1092,8 +1126,14 @@ pub fn build_cfg_ts(
 ) -> Option<ControlFlowGraph> {
     // Must be a function node
     let kind = node.kind();
-    if !matches!(kind, "function_declaration" | "function" | "arrow_function" 
-        | "method_definition" | "function_expression") {
+    if !matches!(
+        kind,
+        "function_declaration"
+            | "function"
+            | "arrow_function"
+            | "method_definition"
+            | "function_expression"
+    ) {
         return None;
     }
 
@@ -1106,10 +1146,10 @@ pub fn build_cfg_ts(
     };
 
     let mut cfg = ControlFlowGraph::new(name, path.to_path_buf(), start_line, language);
-    
+
     // Find the body
     let body = node.child_by_field_name("body")?;
-    
+
     let mut builder = TsCfgBuilder::new(&mut cfg, source);
     builder.visit_node(&body);
     builder.finalize();
@@ -1195,14 +1235,16 @@ impl<'a> TsCfgBuilder<'a> {
 
     fn visit_if(&mut self, node: &tree_sitter::Node) {
         let line = node.start_position().row as u32 + 1;
-        
-        let cond = node.child_by_field_name("condition")
+
+        let cond = node
+            .child_by_field_name("condition")
             .and_then(|c| c.utf8_text(self.source).ok())
             .unwrap_or("")
             .to_string();
 
         let if_node = self.cfg.add_node(NodeKind::If, (line, line));
-        self.cfg.add_edge(self.current_node, if_node, EdgeKind::Fallthrough, None);
+        self.cfg
+            .add_edge(self.current_node, if_node, EdgeKind::Fallthrough, None);
 
         let end_line = node.end_position().row as u32 + 1;
         let merge_node = self.cfg.add_node(NodeKind::Block, (end_line, end_line));
@@ -1211,13 +1253,19 @@ impl<'a> TsCfgBuilder<'a> {
         if let Some(consequence) = node.child_by_field_name("consequence") {
             let cons_line = consequence.start_position().row as u32 + 1;
             let true_block = self.cfg.add_node(NodeKind::Block, (cons_line, cons_line));
-            self.cfg.add_edge(if_node, true_block, EdgeKind::TrueBranch, Some(cond.clone()));
-            
+            self.cfg.add_edge(
+                if_node,
+                true_block,
+                EdgeKind::TrueBranch,
+                Some(cond.clone()),
+            );
+
             self.current_node = true_block;
             self.visit_node(&consequence);
-            
+
             if !self.is_exit_node(self.current_node) {
-                self.cfg.add_edge(self.current_node, merge_node, EdgeKind::Fallthrough, None);
+                self.cfg
+                    .add_edge(self.current_node, merge_node, EdgeKind::Fallthrough, None);
             }
         }
 
@@ -1225,16 +1273,19 @@ impl<'a> TsCfgBuilder<'a> {
         if let Some(alternative) = node.child_by_field_name("alternative") {
             let alt_line = alternative.start_position().row as u32 + 1;
             let false_block = self.cfg.add_node(NodeKind::Block, (alt_line, alt_line));
-            self.cfg.add_edge(if_node, false_block, EdgeKind::FalseBranch, Some(cond));
-            
+            self.cfg
+                .add_edge(if_node, false_block, EdgeKind::FalseBranch, Some(cond));
+
             self.current_node = false_block;
             self.visit_node(&alternative);
-            
+
             if !self.is_exit_node(self.current_node) {
-                self.cfg.add_edge(self.current_node, merge_node, EdgeKind::Fallthrough, None);
+                self.cfg
+                    .add_edge(self.current_node, merge_node, EdgeKind::Fallthrough, None);
             }
         } else {
-            self.cfg.add_edge(if_node, merge_node, EdgeKind::FalseBranch, Some(cond));
+            self.cfg
+                .add_edge(if_node, merge_node, EdgeKind::FalseBranch, Some(cond));
         }
 
         self.current_node = merge_node;
@@ -1242,14 +1293,16 @@ impl<'a> TsCfgBuilder<'a> {
 
     fn visit_switch(&mut self, node: &tree_sitter::Node) {
         let line = node.start_position().row as u32 + 1;
-        
-        let _scrutinee = node.child_by_field_name("value")
+
+        let _scrutinee = node
+            .child_by_field_name("value")
             .and_then(|c| c.utf8_text(self.source).ok())
             .unwrap_or("")
             .to_string();
 
         let switch_node = self.cfg.add_node(NodeKind::Match, (line, line));
-        self.cfg.add_edge(self.current_node, switch_node, EdgeKind::Fallthrough, None);
+        self.cfg
+            .add_edge(self.current_node, switch_node, EdgeKind::Fallthrough, None);
 
         let end_line = node.end_position().row as u32 + 1;
         let merge_node = self.cfg.add_node(NodeKind::Block, (end_line, end_line));
@@ -1270,20 +1323,33 @@ impl<'a> TsCfgBuilder<'a> {
                     };
 
                     let case_block = self.cfg.add_node(NodeKind::Block, (case_line, case_line));
-                    self.cfg.add_edge(switch_node, case_block, EdgeKind::MatchArm, Some(case_label));
-                    
+                    self.cfg.add_edge(
+                        switch_node,
+                        case_block,
+                        EdgeKind::MatchArm,
+                        Some(case_label),
+                    );
+
                     self.current_node = case_block;
-                    
+
                     // Visit case body statements
                     let mut stmt_cursor = case.walk();
                     for stmt in case.children(&mut stmt_cursor) {
-                        if stmt.is_named() && stmt.kind() != "identifier" && !stmt.kind().contains("comment") {
+                        if stmt.is_named()
+                            && stmt.kind() != "identifier"
+                            && !stmt.kind().contains("comment")
+                        {
                             self.visit_node(&stmt);
                         }
                     }
-                    
+
                     if !self.is_exit_node(self.current_node) {
-                        self.cfg.add_edge(self.current_node, merge_node, EdgeKind::Fallthrough, None);
+                        self.cfg.add_edge(
+                            self.current_node,
+                            merge_node,
+                            EdgeKind::Fallthrough,
+                            None,
+                        );
                     }
                 }
             }
@@ -1294,13 +1360,15 @@ impl<'a> TsCfgBuilder<'a> {
 
     fn visit_for(&mut self, node: &tree_sitter::Node) {
         let line = node.start_position().row as u32 + 1;
-        
+
         let header = self.cfg.add_node(NodeKind::Loop, (line, line));
-        self.cfg.add_edge(self.current_node, header, EdgeKind::Fallthrough, None);
+        self.cfg
+            .add_edge(self.current_node, header, EdgeKind::Fallthrough, None);
 
         let body_line = line + 1;
         let body = self.cfg.add_node(NodeKind::Block, (body_line, body_line));
-        self.cfg.add_edge(header, body, EdgeKind::TrueBranch, Some("iteration".into()));
+        self.cfg
+            .add_edge(header, body, EdgeKind::TrueBranch, Some("iteration".into()));
 
         let end_line = node.end_position().row as u32 + 1;
         let exit = self.cfg.add_node(NodeKind::Block, (end_line, end_line));
@@ -1308,63 +1376,71 @@ impl<'a> TsCfgBuilder<'a> {
 
         self.loop_stack.push((header, exit));
         self.current_node = body;
-        
+
         if let Some(body_node) = node.child_by_field_name("body") {
             self.visit_node(&body_node);
         }
-        
+
         if !self.is_exit_node(self.current_node) {
-            self.cfg.add_edge(self.current_node, header, EdgeKind::LoopBack, None);
+            self.cfg
+                .add_edge(self.current_node, header, EdgeKind::LoopBack, None);
         }
-        
+
         self.loop_stack.pop();
         self.current_node = exit;
     }
 
     fn visit_while(&mut self, node: &tree_sitter::Node) {
         let line = node.start_position().row as u32 + 1;
-        
-        let cond = node.child_by_field_name("condition")
+
+        let cond = node
+            .child_by_field_name("condition")
             .and_then(|c| c.utf8_text(self.source).ok())
             .unwrap_or("")
             .to_string();
-        
+
         let header = self.cfg.add_node(NodeKind::Loop, (line, line));
-        self.cfg.add_edge(self.current_node, header, EdgeKind::Fallthrough, None);
+        self.cfg
+            .add_edge(self.current_node, header, EdgeKind::Fallthrough, None);
 
         let body_line = line + 1;
         let body = self.cfg.add_node(NodeKind::Block, (body_line, body_line));
-        self.cfg.add_edge(header, body, EdgeKind::TrueBranch, Some(cond.clone()));
+        self.cfg
+            .add_edge(header, body, EdgeKind::TrueBranch, Some(cond.clone()));
 
         let end_line = node.end_position().row as u32 + 1;
         let exit = self.cfg.add_node(NodeKind::Block, (end_line, end_line));
-        self.cfg.add_edge(header, exit, EdgeKind::LoopExit, Some(format!("!{}", cond)));
+        self.cfg
+            .add_edge(header, exit, EdgeKind::LoopExit, Some(format!("!{}", cond)));
 
         self.loop_stack.push((header, exit));
         self.current_node = body;
-        
+
         if let Some(body_node) = node.child_by_field_name("body") {
             self.visit_node(&body_node);
         }
-        
+
         if !self.is_exit_node(self.current_node) {
-            self.cfg.add_edge(self.current_node, header, EdgeKind::LoopBack, None);
+            self.cfg
+                .add_edge(self.current_node, header, EdgeKind::LoopBack, None);
         }
-        
+
         self.loop_stack.pop();
         self.current_node = exit;
     }
 
     fn visit_do_while(&mut self, node: &tree_sitter::Node) {
         let line = node.start_position().row as u32 + 1;
-        
-        let cond = node.child_by_field_name("condition")
+
+        let cond = node
+            .child_by_field_name("condition")
             .and_then(|c| c.utf8_text(self.source).ok())
             .unwrap_or("")
             .to_string();
-        
+
         let body = self.cfg.add_node(NodeKind::Block, (line, line));
-        self.cfg.add_edge(self.current_node, body, EdgeKind::Fallthrough, None);
+        self.cfg
+            .add_edge(self.current_node, body, EdgeKind::Fallthrough, None);
 
         let header = self.cfg.add_node(NodeKind::Loop, (line, line));
         let end_line = node.end_position().row as u32 + 1;
@@ -1372,18 +1448,21 @@ impl<'a> TsCfgBuilder<'a> {
 
         self.loop_stack.push((header, exit));
         self.current_node = body;
-        
+
         if let Some(body_node) = node.child_by_field_name("body") {
             self.visit_node(&body_node);
         }
-        
+
         if !self.is_exit_node(self.current_node) {
-            self.cfg.add_edge(self.current_node, header, EdgeKind::Fallthrough, None);
+            self.cfg
+                .add_edge(self.current_node, header, EdgeKind::Fallthrough, None);
         }
-        
-        self.cfg.add_edge(header, body, EdgeKind::TrueBranch, Some(cond.clone()));
-        self.cfg.add_edge(header, exit, EdgeKind::LoopExit, Some(format!("!{}", cond)));
-        
+
+        self.cfg
+            .add_edge(header, body, EdgeKind::TrueBranch, Some(cond.clone()));
+        self.cfg
+            .add_edge(header, exit, EdgeKind::LoopExit, Some(format!("!{}", cond)));
+
         self.loop_stack.pop();
         self.current_node = exit;
     }
@@ -1416,43 +1495,54 @@ impl<'a> TsCfgBuilder<'a> {
         if let Some(body) = node.child_by_field_name("body") {
             self.visit_node(&body);
         }
-        
+
         let after_try = self.current_node;
-        
+
         // Catch handler
         if let Some(handler) = node.child_by_field_name("handler") {
             let catch_line = handler.start_position().row as u32 + 1;
             let catch_block = self.cfg.add_node(NodeKind::Block, (catch_line, catch_line));
             // Exception edge from try block
-            self.cfg.add_edge(after_try, catch_block, EdgeKind::Exception, Some("catch".into()));
-            
+            self.cfg.add_edge(
+                after_try,
+                catch_block,
+                EdgeKind::Exception,
+                Some("catch".into()),
+            );
+
             self.current_node = catch_block;
             if let Some(body) = handler.child_by_field_name("body") {
                 self.visit_node(&body);
             }
-            
+
             if !self.is_exit_node(self.current_node) {
-                self.cfg.add_edge(self.current_node, merge_node, EdgeKind::Fallthrough, None);
+                self.cfg
+                    .add_edge(self.current_node, merge_node, EdgeKind::Fallthrough, None);
             }
         }
-        
+
         // Connect try to merge
         if !self.is_exit_node(after_try) {
-            self.cfg.add_edge(after_try, merge_node, EdgeKind::Fallthrough, None);
+            self.cfg
+                .add_edge(after_try, merge_node, EdgeKind::Fallthrough, None);
         }
 
         // Finally handler
         if let Some(finalizer) = node.child_by_field_name("finalizer") {
             let finally_line = finalizer.start_position().row as u32 + 1;
-            let finally_block = self.cfg.add_node(NodeKind::Block, (finally_line, finally_line));
-            self.cfg.add_edge(merge_node, finally_block, EdgeKind::Fallthrough, None);
-            
+            let finally_block = self
+                .cfg
+                .add_node(NodeKind::Block, (finally_line, finally_line));
+            self.cfg
+                .add_edge(merge_node, finally_block, EdgeKind::Fallthrough, None);
+
             self.current_node = finally_block;
             self.visit_node(&finalizer);
-            
+
             let final_merge = self.cfg.add_node(NodeKind::Block, (end_line, end_line));
             if !self.is_exit_node(self.current_node) {
-                self.cfg.add_edge(self.current_node, final_merge, EdgeKind::Fallthrough, None);
+                self.cfg
+                    .add_edge(self.current_node, final_merge, EdgeKind::Fallthrough, None);
             }
             self.current_node = final_merge;
         } else {
@@ -1462,12 +1552,13 @@ impl<'a> TsCfgBuilder<'a> {
 
     fn visit_expression_statement(&mut self, node: &tree_sitter::Node) {
         let line = node.start_position().row as u32 + 1;
-        
+
         // Check for process.exit or similar
         if let Ok(text) = node.utf8_text(self.source) {
             if is_ts_exit_call(text) {
                 let exit_node = self.cfg.add_node(NodeKind::Exit, (line, line));
-                self.cfg.add_edge(self.current_node, exit_node, EdgeKind::Fallthrough, None);
+                self.cfg
+                    .add_edge(self.current_node, exit_node, EdgeKind::Fallthrough, None);
                 self.current_node = exit_node;
                 return;
             }
@@ -1485,7 +1576,7 @@ impl<'a> TsCfgBuilder<'a> {
 
     fn visit_declaration(&mut self, node: &tree_sitter::Node) {
         let line = node.start_position().row as u32 + 1;
-        
+
         let stmt = Statement {
             line,
             kind: StatementKind::Declaration,
@@ -1500,7 +1591,11 @@ impl<'a> TsCfgBuilder<'a> {
         if let Some(node) = self.cfg.nodes.get(node_id as usize) {
             matches!(
                 node.kind,
-                NodeKind::Return | NodeKind::Exit | NodeKind::Panic | NodeKind::Break | NodeKind::Continue
+                NodeKind::Return
+                    | NodeKind::Exit
+                    | NodeKind::Panic
+                    | NodeKind::Break
+                    | NodeKind::Continue
             )
         } else {
             false
@@ -1518,9 +1613,7 @@ impl<'a> TsCfgBuilder<'a> {
 }
 
 fn is_ts_exit_call(text: &str) -> bool {
-    text.contains("process.exit")
-        || text.contains("Deno.exit")
-        || text.contains("sys.exit")
+    text.contains("process.exit") || text.contains("Deno.exit") || text.contains("sys.exit")
 }
 
 // ============================================================================
@@ -1538,17 +1631,18 @@ pub fn build_cfg_python(
         return None;
     }
 
-    let name = node.child_by_field_name("name")
+    let name = node
+        .child_by_field_name("name")
         .and_then(|n| n.utf8_text(source).ok())
         .unwrap_or("anonymous")
         .to_string();
-    
+
     let start_line = node.start_position().row as u32 + 1;
 
     let mut cfg = ControlFlowGraph::new(name, path.to_path_buf(), start_line, CfgLanguage::Python);
-    
+
     let body = node.child_by_field_name("body")?;
-    
+
     let mut builder = PyCfgBuilder::new(&mut cfg, source);
     builder.visit_node(&body);
     builder.finalize();
@@ -1619,14 +1713,16 @@ impl<'a> PyCfgBuilder<'a> {
 
     fn visit_if(&mut self, node: &tree_sitter::Node) {
         let line = node.start_position().row as u32 + 1;
-        
-        let cond = node.child_by_field_name("condition")
+
+        let cond = node
+            .child_by_field_name("condition")
             .and_then(|c| c.utf8_text(self.source).ok())
             .unwrap_or("")
             .to_string();
 
         let if_node = self.cfg.add_node(NodeKind::If, (line, line));
-        self.cfg.add_edge(self.current_node, if_node, EdgeKind::Fallthrough, None);
+        self.cfg
+            .add_edge(self.current_node, if_node, EdgeKind::Fallthrough, None);
 
         let end_line = node.end_position().row as u32 + 1;
         let merge_node = self.cfg.add_node(NodeKind::Block, (end_line, end_line));
@@ -1635,13 +1731,19 @@ impl<'a> PyCfgBuilder<'a> {
         if let Some(consequence) = node.child_by_field_name("consequence") {
             let cons_line = consequence.start_position().row as u32 + 1;
             let true_block = self.cfg.add_node(NodeKind::Block, (cons_line, cons_line));
-            self.cfg.add_edge(if_node, true_block, EdgeKind::TrueBranch, Some(cond.clone()));
-            
+            self.cfg.add_edge(
+                if_node,
+                true_block,
+                EdgeKind::TrueBranch,
+                Some(cond.clone()),
+            );
+
             self.current_node = true_block;
             self.visit_node(&consequence);
-            
+
             if !self.is_exit_node(self.current_node) {
-                self.cfg.add_edge(self.current_node, merge_node, EdgeKind::Fallthrough, None);
+                self.cfg
+                    .add_edge(self.current_node, merge_node, EdgeKind::Fallthrough, None);
             }
         }
 
@@ -1649,16 +1751,19 @@ impl<'a> PyCfgBuilder<'a> {
         if let Some(alternative) = node.child_by_field_name("alternative") {
             let alt_line = alternative.start_position().row as u32 + 1;
             let false_block = self.cfg.add_node(NodeKind::Block, (alt_line, alt_line));
-            self.cfg.add_edge(if_node, false_block, EdgeKind::FalseBranch, Some(cond));
-            
+            self.cfg
+                .add_edge(if_node, false_block, EdgeKind::FalseBranch, Some(cond));
+
             self.current_node = false_block;
             self.visit_node(&alternative);
-            
+
             if !self.is_exit_node(self.current_node) {
-                self.cfg.add_edge(self.current_node, merge_node, EdgeKind::Fallthrough, None);
+                self.cfg
+                    .add_edge(self.current_node, merge_node, EdgeKind::Fallthrough, None);
             }
         } else {
-            self.cfg.add_edge(if_node, merge_node, EdgeKind::FalseBranch, Some(cond));
+            self.cfg
+                .add_edge(if_node, merge_node, EdgeKind::FalseBranch, Some(cond));
         }
 
         self.current_node = merge_node;
@@ -1666,9 +1771,10 @@ impl<'a> PyCfgBuilder<'a> {
 
     fn visit_match(&mut self, node: &tree_sitter::Node) {
         let line = node.start_position().row as u32 + 1;
-        
+
         let match_node = self.cfg.add_node(NodeKind::Match, (line, line));
-        self.cfg.add_edge(self.current_node, match_node, EdgeKind::Fallthrough, None);
+        self.cfg
+            .add_edge(self.current_node, match_node, EdgeKind::Fallthrough, None);
 
         let end_line = node.end_position().row as u32 + 1;
         let merge_node = self.cfg.add_node(NodeKind::Block, (end_line, end_line));
@@ -1678,22 +1784,25 @@ impl<'a> PyCfgBuilder<'a> {
         for child in node.children(&mut cursor) {
             if child.kind() == "case_clause" {
                 let case_line = child.start_position().row as u32 + 1;
-                let pattern = child.child_by_field_name("pattern")
+                let pattern = child
+                    .child_by_field_name("pattern")
                     .and_then(|p| p.utf8_text(self.source).ok())
                     .unwrap_or("_")
                     .to_string();
 
                 let case_block = self.cfg.add_node(NodeKind::Block, (case_line, case_line));
-                self.cfg.add_edge(match_node, case_block, EdgeKind::MatchArm, Some(pattern));
-                
+                self.cfg
+                    .add_edge(match_node, case_block, EdgeKind::MatchArm, Some(pattern));
+
                 self.current_node = case_block;
-                
+
                 if let Some(body) = child.child_by_field_name("consequence") {
                     self.visit_node(&body);
                 }
-                
+
                 if !self.is_exit_node(self.current_node) {
-                    self.cfg.add_edge(self.current_node, merge_node, EdgeKind::Fallthrough, None);
+                    self.cfg
+                        .add_edge(self.current_node, merge_node, EdgeKind::Fallthrough, None);
                 }
             }
         }
@@ -1703,12 +1812,18 @@ impl<'a> PyCfgBuilder<'a> {
 
     fn visit_for(&mut self, node: &tree_sitter::Node) {
         let line = node.start_position().row as u32 + 1;
-        
+
         let header = self.cfg.add_node(NodeKind::Loop, (line, line));
-        self.cfg.add_edge(self.current_node, header, EdgeKind::Fallthrough, None);
+        self.cfg
+            .add_edge(self.current_node, header, EdgeKind::Fallthrough, None);
 
         let body_node = self.cfg.add_node(NodeKind::Block, (line + 1, line + 1));
-        self.cfg.add_edge(header, body_node, EdgeKind::TrueBranch, Some("iteration".into()));
+        self.cfg.add_edge(
+            header,
+            body_node,
+            EdgeKind::TrueBranch,
+            Some("iteration".into()),
+        );
 
         let end_line = node.end_position().row as u32 + 1;
         let exit = self.cfg.add_node(NodeKind::Block, (end_line, end_line));
@@ -1716,48 +1831,58 @@ impl<'a> PyCfgBuilder<'a> {
 
         self.loop_stack.push((header, exit));
         self.current_node = body_node;
-        
+
         if let Some(body) = node.child_by_field_name("body") {
             self.visit_node(&body);
         }
-        
+
         if !self.is_exit_node(self.current_node) {
-            self.cfg.add_edge(self.current_node, header, EdgeKind::LoopBack, None);
+            self.cfg
+                .add_edge(self.current_node, header, EdgeKind::LoopBack, None);
         }
-        
+
         self.loop_stack.pop();
         self.current_node = exit;
     }
 
     fn visit_while(&mut self, node: &tree_sitter::Node) {
         let line = node.start_position().row as u32 + 1;
-        
-        let cond = node.child_by_field_name("condition")
+
+        let cond = node
+            .child_by_field_name("condition")
             .and_then(|c| c.utf8_text(self.source).ok())
             .unwrap_or("")
             .to_string();
-        
+
         let header = self.cfg.add_node(NodeKind::Loop, (line, line));
-        self.cfg.add_edge(self.current_node, header, EdgeKind::Fallthrough, None);
+        self.cfg
+            .add_edge(self.current_node, header, EdgeKind::Fallthrough, None);
 
         let body_node = self.cfg.add_node(NodeKind::Block, (line + 1, line + 1));
-        self.cfg.add_edge(header, body_node, EdgeKind::TrueBranch, Some(cond.clone()));
+        self.cfg
+            .add_edge(header, body_node, EdgeKind::TrueBranch, Some(cond.clone()));
 
         let end_line = node.end_position().row as u32 + 1;
         let exit = self.cfg.add_node(NodeKind::Block, (end_line, end_line));
-        self.cfg.add_edge(header, exit, EdgeKind::LoopExit, Some(format!("not {}", cond)));
+        self.cfg.add_edge(
+            header,
+            exit,
+            EdgeKind::LoopExit,
+            Some(format!("not {}", cond)),
+        );
 
         self.loop_stack.push((header, exit));
         self.current_node = body_node;
-        
+
         if let Some(body) = node.child_by_field_name("body") {
             self.visit_node(&body);
         }
-        
+
         if !self.is_exit_node(self.current_node) {
-            self.cfg.add_edge(self.current_node, header, EdgeKind::LoopBack, None);
+            self.cfg
+                .add_edge(self.current_node, header, EdgeKind::LoopBack, None);
         }
-        
+
         self.loop_stack.pop();
         self.current_node = exit;
     }
@@ -1790,17 +1915,24 @@ impl<'a> PyCfgBuilder<'a> {
         if let Some(body) = node.child_by_field_name("body") {
             self.visit_node(&body);
         }
-        
+
         let after_try = self.current_node;
-        
+
         // Except handlers
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             if child.kind() == "except_clause" {
                 let except_line = child.start_position().row as u32 + 1;
-                let except_block = self.cfg.add_node(NodeKind::Block, (except_line, except_line));
-                self.cfg.add_edge(after_try, except_block, EdgeKind::Exception, Some("except".into()));
-                
+                let except_block = self
+                    .cfg
+                    .add_node(NodeKind::Block, (except_line, except_line));
+                self.cfg.add_edge(
+                    after_try,
+                    except_block,
+                    EdgeKind::Exception,
+                    Some("except".into()),
+                );
+
                 self.current_node = except_block;
                 let mut handler_cursor = child.walk();
                 for handler_child in child.children(&mut handler_cursor) {
@@ -1808,15 +1940,17 @@ impl<'a> PyCfgBuilder<'a> {
                         self.visit_node(&handler_child);
                     }
                 }
-                
+
                 if !self.is_exit_node(self.current_node) {
-                    self.cfg.add_edge(self.current_node, merge_node, EdgeKind::Fallthrough, None);
+                    self.cfg
+                        .add_edge(self.current_node, merge_node, EdgeKind::Fallthrough, None);
                 }
             }
         }
-        
+
         if !self.is_exit_node(after_try) {
-            self.cfg.add_edge(after_try, merge_node, EdgeKind::Fallthrough, None);
+            self.cfg
+                .add_edge(after_try, merge_node, EdgeKind::Fallthrough, None);
         }
 
         self.current_node = merge_node;
@@ -1824,11 +1958,12 @@ impl<'a> PyCfgBuilder<'a> {
 
     fn visit_expression(&mut self, node: &tree_sitter::Node) {
         let line = node.start_position().row as u32 + 1;
-        
+
         if let Ok(text) = node.utf8_text(self.source) {
             if text.contains("sys.exit") || text.contains("exit(") || text.contains("os._exit") {
                 let exit_node = self.cfg.add_node(NodeKind::Exit, (line, line));
-                self.cfg.add_edge(self.current_node, exit_node, EdgeKind::Fallthrough, None);
+                self.cfg
+                    .add_edge(self.current_node, exit_node, EdgeKind::Fallthrough, None);
                 self.current_node = exit_node;
                 return;
             }
@@ -1860,7 +1995,11 @@ impl<'a> PyCfgBuilder<'a> {
         if let Some(node) = self.cfg.nodes.get(node_id as usize) {
             matches!(
                 node.kind,
-                NodeKind::Return | NodeKind::Exit | NodeKind::Panic | NodeKind::Break | NodeKind::Continue
+                NodeKind::Return
+                    | NodeKind::Exit
+                    | NodeKind::Panic
+                    | NodeKind::Break
+                    | NodeKind::Continue
             )
         } else {
             false

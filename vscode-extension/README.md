@@ -12,7 +12,7 @@ ToneGuard flags common AI-style writing patterns in Markdown and text files. It 
 
 - Live diagnostics for supported file types (Problems panel + inline squiggles)
 - Dashboard (Review, Findings, Organizer, Settings)
-- Flow Map (blueprint graph + clusters, function index, CFG viewer)
+- Flow Map (Blueprint graph + clusters, Calls view, CFG viewer with copyable Mermaid)
 - Optional skill installer (Cursor / Claude Code / Codex)
 
 ## Reports

@@ -485,9 +485,8 @@ fn extract_js_edges(from_path: &Path, content: &str) -> Vec<RawEdge> {
     });
     static RE_IMPORT_SIDE: Lazy<Regex> =
         Lazy::new(|| Regex::new(r#"^\s*import\s+['"]([^'"]+)['"]"#).unwrap());
-    static RE_EXPORT_FROM: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r#"^\s*export\s+[^;]*?\s+from\s+['"]([^'"]+)['"]"#).unwrap()
-    });
+    static RE_EXPORT_FROM: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r#"^\s*export\s+[^;]*?\s+from\s+['"]([^'"]+)['"]"#).unwrap());
     static RE_REQUIRE: Lazy<Regex> =
         Lazy::new(|| Regex::new(r#"require\(\s*['"]([^'"]+)['"]\s*\)"#).unwrap());
     static RE_DYNAMIC_IMPORT: Lazy<Regex> =
@@ -585,7 +584,10 @@ fn resolve_python_relative(from_path: &Path, dots: &str, module: &str) -> Option
     if dots.is_empty() {
         return None;
     }
-    let mut base = from_path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+    let mut base = from_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
     let up = dots.len().saturating_sub(1);
     for _ in 0..up {
         base = base.parent()?.to_path_buf();
@@ -745,7 +747,8 @@ fn process_rust_use_stmt(
     let targets = expand_rust_use_targets(expr);
     let mut edges = Vec::new();
     for target in targets {
-        let resolved = resolve_rust_use_target(from_path, &target, workspace_root, workspace_crates);
+        let resolved =
+            resolve_rust_use_target(from_path, &target, workspace_root, workspace_crates);
         edges.push(RawEdge {
             to_path: resolved,
             to_raw: target,
@@ -911,11 +914,14 @@ fn parse_rust_module_start(
 ) -> Option<(PathBuf, Vec<String>)> {
     let from_dir = from_path.parent().unwrap_or_else(|| Path::new("."));
     if let Some(rest) = target.strip_prefix("crate::") {
-        let crate_root = find_rust_crate_root(from_path, workspace_root).unwrap_or_else(|| {
-            workspace_root.to_path_buf()
-        });
+        let crate_root = find_rust_crate_root(from_path, workspace_root)
+            .unwrap_or_else(|| workspace_root.to_path_buf());
         let src_dir = crate_root.join("src");
-        let start = if src_dir.is_dir() { src_dir } else { crate_root };
+        let start = if src_dir.is_dir() {
+            src_dir
+        } else {
+            crate_root
+        };
         let segments = split_rust_segments(rest);
         return Some((start, segments));
     }

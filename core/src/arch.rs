@@ -823,7 +823,9 @@ impl RustAggregate {
                             ),
                             find_pattern: Some(format!(r"{}\\s*\\(", regex::escape(&first_fn))),
                             replace_pattern: Some(format!("{}(", last_fn)),
-                            alternative: Some("Add justification to flow spec with reason: isolation".into()),
+                            alternative: Some(
+                                "Add justification to flow spec with reason: isolation".into(),
+                            ),
                         }),
                         confidence_score: None,
                         confidence_factors: None,
@@ -1414,7 +1416,9 @@ impl TsAggregate {
                             ),
                             find_pattern: Some(format!(r"{}\\s*\\(", regex::escape(&first_fn))),
                             replace_pattern: Some(format!("{}(", last_fn)),
-                            alternative: Some("Add justification to flow spec with reason: isolation".into()),
+                            alternative: Some(
+                                "Add justification to flow spec with reason: isolation".into(),
+                            ),
                         }),
                         confidence_score: None,
                         confidence_factors: None,
@@ -1873,7 +1877,9 @@ impl PyAggregate {
                             ),
                             find_pattern: Some(format!(r"{}\\s*\\(", regex::escape(&first_fn))),
                             replace_pattern: Some(format!("{}(", last_fn)),
-                            alternative: Some("Add justification to flow spec with reason: isolation".into()),
+                            alternative: Some(
+                                "Add justification to flow spec with reason: isolation".into(),
+                            ),
                         }),
                         confidence_score: None,
                         confidence_factors: None,
@@ -2162,7 +2168,7 @@ fn analyze_py_file(path: &Path, text: &str) -> PyFileReport {
 // Logic Bug Detectors
 // ============================================================================
 
-use crate::cfg::{build_cfg_rust, ControlFlowGraph, NodeKind, CfgLanguage};
+use crate::cfg::{build_cfg_rust, CfgLanguage, ControlFlowGraph, NodeKind};
 use crate::dfg::{build_dfg_rust, DataFlowGraph};
 
 /// Result of running logic detectors on Rust code
@@ -2177,7 +2183,7 @@ pub struct LogicAuditResult {
 /// Run all logic detectors on Rust code
 pub fn analyze_rust_logic(path: &Path, text: &str) -> LogicAuditResult {
     let mut result = LogicAuditResult::default();
-    
+
     let file = match syn::parse_file(text) {
         Ok(f) => f,
         Err(_) => return result,
@@ -2188,28 +2194,43 @@ pub fn analyze_rust_logic(path: &Path, text: &str) -> LogicAuditResult {
             syn::Item::Fn(item_fn) => {
                 let cfg = build_cfg_rust(item_fn, path);
                 let dfg = build_dfg_rust(item_fn, path);
-                
+
                 // Run detectors
-                result.exit_path_findings.extend(detect_exit_paths(&cfg, path));
-                result.dead_branch_findings.extend(detect_dead_branches(&cfg, path));
-                result.validation_gap_findings.extend(detect_validation_gaps(&dfg, path));
-                result.error_escalation_findings.extend(detect_error_escalation(&dfg, path));
+                result
+                    .exit_path_findings
+                    .extend(detect_exit_paths(&cfg, path));
+                result
+                    .dead_branch_findings
+                    .extend(detect_dead_branches(&cfg, path));
+                result
+                    .validation_gap_findings
+                    .extend(detect_validation_gaps(&dfg, path));
+                result
+                    .error_escalation_findings
+                    .extend(detect_error_escalation(&dfg, path));
             }
             syn::Item::Impl(impl_block) => {
                 let self_ty = match &*impl_block.self_ty {
-                    syn::Type::Path(tp) => tp.path.segments.last()
+                    syn::Type::Path(tp) => tp
+                        .path
+                        .segments
+                        .last()
                         .map(|s| s.ident.to_string())
                         .unwrap_or_else(|| "Unknown".into()),
                     _ => "Unknown".into(),
                 };
-                
+
                 for impl_item in &impl_block.items {
                     if let syn::ImplItem::Fn(method) = impl_item {
                         let cfg = crate::cfg::build_cfg_rust_method(method, path, &self_ty);
                         // For methods, we'd need a similar DFG builder
-                        
-                        result.exit_path_findings.extend(detect_exit_paths(&cfg, path));
-                        result.dead_branch_findings.extend(detect_dead_branches(&cfg, path));
+
+                        result
+                            .exit_path_findings
+                            .extend(detect_exit_paths(&cfg, path));
+                        result
+                            .dead_branch_findings
+                            .extend(detect_dead_branches(&cfg, path));
                     }
                 }
             }
@@ -2223,19 +2244,20 @@ pub fn analyze_rust_logic(path: &Path, text: &str) -> LogicAuditResult {
 /// Detect exit paths (process::exit, panic!, etc.) and trace what conditions lead to them
 fn detect_exit_paths(cfg: &ControlFlowGraph, _path: &Path) -> Vec<FlowFinding> {
     let mut findings = Vec::new();
-    
+
     // Get all paths that lead to exit nodes
     let exit_paths = cfg.paths_to_exit_kind(&NodeKind::Exit);
     let panic_paths = cfg.paths_to_exit_kind(&NodeKind::Panic);
-    
+
     for exit_path in exit_paths.into_iter().chain(panic_paths) {
         // Skip simple cases (direct exit)
         if exit_path.nodes.len() <= 2 {
             continue;
         }
-        
+
         // Build condition chain
-        let conditions: Vec<String> = exit_path.conditions
+        let conditions: Vec<String> = exit_path
+            .conditions
             .iter()
             .map(|c| {
                 if c.must_be_true {
@@ -2245,21 +2267,23 @@ fn detect_exit_paths(cfg: &ControlFlowGraph, _path: &Path) -> Vec<FlowFinding> {
                 }
             })
             .collect();
-        
+
         if conditions.is_empty() {
             continue;
         }
-        
-        let exit_line = cfg.nodes.get(exit_path.exit_node as usize)
+
+        let exit_line = cfg
+            .nodes
+            .get(exit_path.exit_node as usize)
             .map(|n| n.source_range.0)
             .unwrap_or(0);
-        
+
         let exit_kind = match exit_path.exit_kind {
             NodeKind::Exit => "process exit",
             NodeKind::Panic => "panic",
             _ => "exit",
         };
-        
+
         findings.push(FlowFinding {
             category: FindingCategory::ExitPath,
             severity: FindingSeverity::Info,
@@ -2282,7 +2306,11 @@ fn detect_exit_paths(cfg: &ControlFlowGraph, _path: &Path) -> Vec<FlowFinding> {
             evidence: conditions.clone(),
             fix_instructions: Some(FixInstructions {
                 action: "review".into(),
-                description: format!("Review exit path: {} conditions lead to {}", conditions.len(), exit_kind),
+                description: format!(
+                    "Review exit path: {} conditions lead to {}",
+                    conditions.len(),
+                    exit_kind
+                ),
                 find_pattern: None,
                 replace_pattern: None,
                 alternative: Some("Consider returning Result instead of exiting".into()),
@@ -2295,42 +2323,40 @@ fn detect_exit_paths(cfg: &ControlFlowGraph, _path: &Path) -> Vec<FlowFinding> {
             coverage_info: None,
         });
     }
-    
+
     findings
 }
 
 /// Detect unreachable/dead code
 fn detect_dead_branches(cfg: &ControlFlowGraph, _path: &Path) -> Vec<FlowFinding> {
     let mut findings = Vec::new();
-    
+
     let unreachable = cfg.unreachable_nodes();
-    
+
     for node in unreachable {
         // Skip entry nodes and placeholder nodes
         if matches!(node.kind, NodeKind::Entry) {
             continue;
         }
-        
+
         // Skip nodes with no source range (internal CFG nodes)
         if node.source_range.0 == 0 {
             continue;
         }
-        
+
         // Skip empty blocks that are just merge points from if/else where both branches exit
         // These are CFG artifacts, not user code issues
         if matches!(node.kind, NodeKind::Block) && node.statements.is_empty() {
             continue;
         }
-        
+
         findings.push(FlowFinding {
             category: FindingCategory::DeadBranch,
             severity: FindingSeverity::Warning,
             confidence: FindingConfidence::High,
             message: format!(
                 "Unreachable code in `{}` at lines {}-{}",
-                cfg.name,
-                node.source_range.0,
-                node.source_range.1
+                cfg.name, node.source_range.0, node.source_range.1
             ),
             path: cfg.path.to_string_lossy().replace('\\', "/"),
             line: Some(node.source_range.0),
@@ -2350,30 +2376,28 @@ fn detect_dead_branches(cfg: &ControlFlowGraph, _path: &Path) -> Vec<FlowFinding
                 alternative: Some("If intentional, add unreachable!() with documentation".into()),
             }),
             confidence_score: Some(0.9),
-            confidence_factors: Some(vec![
-                "No edges lead to this node".into(),
-            ]),
+            confidence_factors: Some(vec!["No edges lead to this node".into()]),
             coverage_info: None,
         });
     }
-    
+
     findings
 }
 
 /// Detect validation gaps (unchecked .unwrap() on parameters)
 fn detect_validation_gaps(dfg: &DataFlowGraph, _path: &Path) -> Vec<FlowFinding> {
     let mut findings = Vec::new();
-    
+
     // Check for unvalidated parameters
     let unvalidated = dfg.unvalidated_params();
-    
+
     for param in unvalidated {
         // Only flag if the parameter is used in a potentially dangerous way
         if let Some(usages) = dfg.usages.get(&param.name) {
-            let has_dangerous_use = usages.iter().any(|u| {
-                matches!(u.kind, crate::dfg::UseKind::Index)
-            });
-            
+            let has_dangerous_use = usages
+                .iter()
+                .any(|u| matches!(u.kind, crate::dfg::UseKind::Index));
+
             if has_dangerous_use {
                 findings.push(FlowFinding {
                     category: FindingCategory::ValidationGap,
@@ -2399,15 +2423,13 @@ fn detect_validation_gaps(dfg: &DataFlowGraph, _path: &Path) -> Vec<FlowFinding>
                         alternative: Some("Use .get() instead of [] for safe access".into()),
                     }),
                     confidence_score: Some(0.6),
-                    confidence_factors: Some(vec![
-                        "No assertion or condition check found".into(),
-                    ]),
+                    confidence_factors: Some(vec!["No assertion or condition check found".into()]),
                     coverage_info: None,
                 });
             }
         }
     }
-    
+
     // Check for unchecked unwraps on parameters
     for unwrap in dfg.find_unchecked_unwraps() {
         findings.push(FlowFinding {
@@ -2434,20 +2456,18 @@ fn detect_validation_gaps(dfg: &DataFlowGraph, _path: &Path) -> Vec<FlowFinding>
                 alternative: Some("Use .unwrap_or_default() or match for explicit handling".into()),
             }),
             confidence_score: Some(0.8),
-            confidence_factors: Some(vec![
-                "Direct unwrap on function parameter".into(),
-            ]),
+            confidence_factors: Some(vec!["Direct unwrap on function parameter".into()]),
             coverage_info: None,
         });
     }
-    
+
     findings
 }
 
 /// Detect error escalation patterns (warning becoming error)
 fn detect_error_escalation(dfg: &DataFlowGraph, _path: &Path) -> Vec<FlowFinding> {
     let mut findings = Vec::new();
-    
+
     for pattern in dfg.find_error_escalation() {
         findings.push(FlowFinding {
             category: FindingCategory::ErrorEscalation,
@@ -2455,17 +2475,19 @@ fn detect_error_escalation(dfg: &DataFlowGraph, _path: &Path) -> Vec<FlowFinding
             confidence: FindingConfidence::Medium,
             message: format!(
                 "Variable `{}` used as warning (line {}) but treated as error (line {})",
-                pattern.variable,
-                pattern.warning_line,
-                pattern.error_line
+                pattern.variable, pattern.warning_line, pattern.error_line
             ),
             path: dfg.path.to_string_lossy().replace('\\', "/"),
             line: Some(pattern.warning_line),
             symbol: Some(dfg.name.clone()),
             language: Language::Rust,
             evidence: vec![
-                pattern.warning_context.unwrap_or_else(|| "warning context".into()),
-                pattern.error_context.unwrap_or_else(|| "error context".into()),
+                pattern
+                    .warning_context
+                    .unwrap_or_else(|| "warning context".into()),
+                pattern
+                    .error_context
+                    .unwrap_or_else(|| "error context".into()),
             ],
             fix_instructions: Some(FixInstructions {
                 action: "review".into(),
@@ -2476,12 +2498,12 @@ fn detect_error_escalation(dfg: &DataFlowGraph, _path: &Path) -> Vec<FlowFinding
             }),
             confidence_score: Some(0.6),
             confidence_factors: Some(vec![
-                "Variable name suggests different severity levels".into(),
+                "Variable name suggests different severity levels".into()
             ]),
             coverage_info: None,
         });
     }
-    
+
     findings
 }
 
@@ -2489,40 +2511,42 @@ fn detect_error_escalation(dfg: &DataFlowGraph, _path: &Path) -> Vec<FlowFinding
 pub fn audit_with_logic(paths: &[PathBuf], config: &FlowAuditConfig) -> Result<FlowAuditReport> {
     // Run standard audit first
     let mut report = audit_paths(paths, config)?;
-    
+
     // Then run logic detectors on Rust files
     let ignore_set = build_ignore_set(&config.ignore_globs)?;
     let files = collect_code_files(paths, &ignore_set, config)?;
-    
+
     for file in &files {
         let language = match language_for_path(file) {
             Some(lang) => lang,
             None => continue,
         };
-        
+
         if language != Language::Rust {
             continue;
         }
-        
+
         if !config.languages.contains(&language) {
             continue;
         }
-        
+
         let text = match std::fs::read_to_string(file) {
             Ok(t) => t,
             Err(_) => continue,
         };
-        
+
         let logic_result = analyze_rust_logic(file, &text);
-        
+
         report.findings.extend(logic_result.exit_path_findings);
         report.findings.extend(logic_result.dead_branch_findings);
         report.findings.extend(logic_result.validation_gap_findings);
-        report.findings.extend(logic_result.error_escalation_findings);
+        report
+            .findings
+            .extend(logic_result.error_escalation_findings);
     }
-    
+
     // Recompute summary
     report.summary = summarize(&report.findings, report.summary.files_scanned);
-    
+
     Ok(report)
 }

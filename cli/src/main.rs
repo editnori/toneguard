@@ -2856,7 +2856,7 @@ fn run_flow_index(args: FlowIndexArgs) -> anyhow::Result<()> {
 }
 
 fn run_flow_callgraph(args: FlowCallgraphArgs) -> anyhow::Result<()> {
-    use std::collections::HashMap;
+    use std::collections::{BTreeMap, HashMap};
     use syn::spanned::Spanned;
     use syn::visit::Visit;
 
@@ -2869,6 +2869,10 @@ fn run_flow_callgraph(args: FlowCallgraphArgs) -> anyhow::Result<()> {
         file_display: String,
         start_line: u32,
         kind: String,
+        language: String,
+        in_calls: u32,
+        out_calls: u32,
+        total_calls: u32,
     }
 
     #[derive(Debug, Serialize)]
@@ -2882,11 +2886,28 @@ fn run_flow_callgraph(args: FlowCallgraphArgs) -> anyhow::Result<()> {
     }
 
     #[derive(Debug, Serialize)]
+    struct CallgraphHub {
+        id: String,
+        display_name: String,
+        in_calls: u32,
+        out_calls: u32,
+        total_calls: u32,
+        file_display: String,
+        start_line: u32,
+        language: String,
+    }
+
+    #[derive(Debug, Serialize)]
     struct CallgraphStats {
         files_scanned: usize,
         nodes: usize,
         edges: usize,
         edges_resolved: usize,
+        orphan_nodes: usize,
+        sink_nodes: usize,
+        source_nodes: usize,
+        by_language: BTreeMap<String, usize>,
+        top_hubs: Vec<CallgraphHub>,
     }
 
     #[derive(Debug, Serialize)]
@@ -2901,6 +2922,14 @@ fn run_flow_callgraph(args: FlowCallgraphArgs) -> anyhow::Result<()> {
         edges: Vec<CallgraphEdge>,
         stats: CallgraphStats,
         errors: Vec<CallgraphError>,
+    }
+
+    #[derive(Debug)]
+    struct RawCallEdge {
+        from: String,
+        file_display: String,
+        raw: String,
+        line: u32,
     }
 
     fn normalize_path_display(path: &Path) -> String {
@@ -2926,6 +2955,36 @@ fn run_flow_callgraph(args: FlowCallgraphArgs) -> anyhow::Result<()> {
         }
     }
 
+    fn rust_unwrap_expr(expr: &syn::Expr) -> &syn::Expr {
+        match expr {
+            syn::Expr::Paren(p) => rust_unwrap_expr(&p.expr),
+            syn::Expr::Group(g) => rust_unwrap_expr(&g.expr),
+            syn::Expr::Reference(r) => rust_unwrap_expr(&r.expr),
+            syn::Expr::Unary(u) => rust_unwrap_expr(&u.expr),
+            _ => expr,
+        }
+    }
+
+    fn rust_receiver_is_self(expr: &syn::Expr) -> bool {
+        match rust_unwrap_expr(expr) {
+            syn::Expr::Path(p) => {
+                p.qself.is_none()
+                    && p.path.leading_colon.is_none()
+                    && p.path.segments.len() == 1
+                    && p.path.segments[0].ident == "self"
+            }
+            _ => false,
+        }
+    }
+
+    fn rewrite_self_prefix(raw: &str, self_ty: &str) -> Option<String> {
+        let raw = raw.trim();
+        if raw.starts_with("Self::") {
+            return Some(format!("{self_ty}::{}", raw.trim_start_matches("Self::")));
+        }
+        None
+    }
+
     fn resolve_callee(
         file_display: &str,
         raw: &str,
@@ -2943,7 +3002,11 @@ fn run_flow_callgraph(args: FlowCallgraphArgs) -> anyhow::Result<()> {
         if raw.contains("::") {
             let parts: Vec<&str> = raw.split("::").filter(|s| !s.is_empty()).collect();
             if parts.len() >= 2 {
-                candidates.push(format!("{}::{}", parts[parts.len() - 2], parts[parts.len() - 1]));
+                candidates.push(format!(
+                    "{}::{}",
+                    parts[parts.len() - 2],
+                    parts[parts.len() - 1]
+                ));
             }
             if let Some(last) = parts.last() {
                 candidates.push((*last).to_string());
@@ -2969,32 +3032,67 @@ fn run_flow_callgraph(args: FlowCallgraphArgs) -> anyhow::Result<()> {
         None
     }
 
-    // Load config and collect Rust files (call graph is Rust-only for now).
+    fn add_node(
+        nodes: &mut Vec<CallgraphNode>,
+        by_file_target: &mut HashMap<(String, String), Vec<String>>,
+        by_target: &mut HashMap<String, Vec<String>>,
+        file_abs: &str,
+        file_display: &str,
+        display_name: &str,
+        target_name: &str,
+        start_line: u32,
+        kind: &str,
+        language: &str,
+    ) -> String {
+        let id = format!("{file_display}::{target_name}");
+        nodes.push(CallgraphNode {
+            id: id.clone(),
+            display_name: display_name.to_string(),
+            target_name: target_name.to_string(),
+            file: file_abs.to_string(),
+            file_display: file_display.to_string(),
+            start_line,
+            kind: kind.to_string(),
+            language: language.to_string(),
+            in_calls: 0,
+            out_calls: 0,
+            total_calls: 0,
+        });
+        by_file_target
+            .entry((file_display.to_string(), target_name.to_string()))
+            .or_default()
+            .push(id.clone());
+        by_target
+            .entry(target_name.to_string())
+            .or_default()
+            .push(id.clone());
+        id
+    }
+
+    // Load config and collect code files.
     let (cfg, config_root) = load_config(&args.config)?;
     let mut ignore_globs = cfg.repo_rules.ignore_globs.clone();
     ignore_globs.extend(cfg.flow_rules.ignore_globs.clone());
     let ignore_set = build_ignore_set(&ignore_globs)?;
 
-    let code_files = collect_code_files(&args.paths, ignore_set.as_ref())?;
-    let files: Vec<PathBuf> = code_files
-        .into_iter()
-        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("rs"))
-        .collect();
+    let mut files = collect_code_files(&args.paths, ignore_set.as_ref())?;
+    files.sort_by(|a, b| normalize_path_display(a).cmp(&normalize_path_display(b)));
 
-    // Parse files and index functions/methods.
-    struct ParsedRustFile {
-        file_display: String,
-        file_abs: String,
-        ast: syn::File,
-    }
-
-    let mut parsed: Vec<ParsedRustFile> = Vec::new();
+    let mut files_scanned = 0usize;
+    let mut raw_edges: Vec<RawCallEdge> = Vec::new();
     let mut errors: Vec<CallgraphError> = Vec::new();
 
+    let mut nodes: Vec<CallgraphNode> = Vec::new();
+    let mut by_file_target: HashMap<(String, String), Vec<String>> = HashMap::new();
+    let mut by_target: HashMap<String, Vec<String>> = HashMap::new();
+
+    // Parse files, index nodes, and collect raw call sites (resolution happens after indexing).
     for path in &files {
         let rel = pathdiff::diff_paths(path, &config_root).unwrap_or_else(|| path.clone());
         let file_display = normalize_path_display(&rel);
         let file_abs = normalize_path_display(path);
+        let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+
         let text = match fs::read_to_string(path) {
             Ok(t) => t,
             Err(e) => {
@@ -3005,199 +3103,747 @@ fn run_flow_callgraph(args: FlowCallgraphArgs) -> anyhow::Result<()> {
                 continue;
             }
         };
-        match syn::parse_file(&text) {
-            Ok(ast) => parsed.push(ParsedRustFile {
-                file_display,
-                file_abs,
-                ast,
-            }),
-            Err(e) => {
-                errors.push(CallgraphError {
-                    path: file_display.clone(),
-                    message: format!("Failed to parse Rust file: {e}"),
-                });
-            }
-        }
-    }
 
-    let mut nodes: Vec<CallgraphNode> = Vec::new();
-    let mut by_file_target: HashMap<(String, String), Vec<String>> = HashMap::new();
-    let mut by_target: HashMap<String, Vec<String>> = HashMap::new();
-
-    for file in &parsed {
-        for item in &file.ast.items {
-            match item {
-                syn::Item::Fn(item_fn) => {
-                    let name = item_fn.sig.ident.to_string();
-                    let start_line = item_fn.sig.ident.span().start().line as u32;
-                    let id = format!("{}::{}", file.file_display, name);
-                    nodes.push(CallgraphNode {
-                        id: id.clone(),
-                        display_name: name.clone(),
-                        target_name: name.clone(),
-                        file: file.file_abs.clone(),
-                        file_display: file.file_display.clone(),
-                        start_line,
-                        kind: "function".to_string(),
-                    });
-                    by_file_target
-                        .entry((file.file_display.clone(), name.clone()))
-                        .or_default()
-                        .push(id.clone());
-                    by_target.entry(name).or_default().push(id);
-                }
-                syn::Item::Impl(impl_block) => {
-                    let self_ty = match &*impl_block.self_ty {
-                        syn::Type::Path(tp) => tp
-                            .path
-                            .segments
-                            .last()
-                            .map(|s| s.ident.to_string())
-                            .unwrap_or_else(|| "Unknown".into()),
-                        _ => "Unknown".into(),
-                    };
-                    for impl_item in &impl_block.items {
-                        if let syn::ImplItem::Fn(method) = impl_item {
-                            let fn_name = method.sig.ident.to_string();
-                            let display_name = format!("{self_ty}::{fn_name}");
-                            let start_line = method.sig.ident.span().start().line as u32;
-                            let id = format!("{}::{}", file.file_display, display_name);
-                            nodes.push(CallgraphNode {
-                                id: id.clone(),
-                                display_name: display_name.clone(),
-                                target_name: display_name.clone(),
-                                file: file.file_abs.clone(),
-                                file_display: file.file_display.clone(),
-                                start_line,
-                                kind: "method".to_string(),
-                            });
-                            by_file_target
-                                .entry((file.file_display.clone(), display_name.clone()))
-                                .or_default()
-                                .push(id.clone());
-                            by_target.entry(display_name).or_default().push(id);
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-
-    // Collect call edges.
-    let mut edges: Vec<CallgraphEdge> = Vec::new();
-    let mut edges_resolved = 0usize;
-
-    struct CallVisitor {
-        calls: Vec<(String, u32)>,
-        max: usize,
-    }
-
-    impl<'ast> syn::visit::Visit<'ast> for CallVisitor {
-        fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
-            if self.calls.len() < self.max {
-                if let Some(raw) = rust_callee_text(&node.func) {
-                    let line = node.span().start().line as u32;
-                    self.calls.push((raw, line));
-                }
-            }
-            syn::visit::visit_expr_call(self, node);
-        }
-
-        fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
-            if self.calls.len() < self.max {
-                let raw = node.method.to_string();
-                let line = node.span().start().line as u32;
-                self.calls.push((raw, line));
-            }
-            syn::visit::visit_expr_method_call(self, node);
-        }
-    }
-
-    for file in &parsed {
-        for item in &file.ast.items {
-            match item {
-                syn::Item::Fn(item_fn) => {
-                    let name = item_fn.sig.ident.to_string();
-                    let caller_id = format!("{}::{}", file.file_display, name);
-                    let mut visitor = CallVisitor {
-                        calls: Vec::new(),
-                        max: args.max_calls_per_fn,
-                    };
-                    visitor.visit_block(&item_fn.block);
-                    for (raw, line) in visitor.calls {
-                        let to = resolve_callee(
-                            &file.file_display,
-                            &raw,
-                            &by_file_target,
-                            &by_target,
-                        );
-                        let resolved = to.is_some();
-                        if resolved {
-                            edges_resolved += 1;
-                        } else if args.resolved_only {
-                            continue;
-                        }
-                        edges.push(CallgraphEdge {
-                            from: caller_id.clone(),
-                            to,
-                            to_raw: raw,
-                            kind: "call".to_string(),
-                            line: Some(line),
-                            resolved,
+        match ext {
+            "rs" => {
+                let ast = match syn::parse_file(&text) {
+                    Ok(ast) => ast,
+                    Err(e) => {
+                        errors.push(CallgraphError {
+                            path: file_display.clone(),
+                            message: format!("Failed to parse Rust file: {e}"),
                         });
+                        continue;
+                    }
+                };
+                files_scanned += 1;
+
+                struct CallVisitor {
+                    calls: Vec<(String, u32)>,
+                    max: usize,
+                    self_ty: Option<String>,
+                }
+
+                impl<'ast> syn::visit::Visit<'ast> for CallVisitor {
+                    fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
+                        if self.calls.len() < self.max {
+                            if let Some(mut raw) = rust_callee_text(&node.func) {
+                                if let Some(self_ty) = &self.self_ty {
+                                    if let Some(rewritten) = rewrite_self_prefix(&raw, self_ty) {
+                                        raw = rewritten;
+                                    }
+                                }
+                                let line = node.span().start().line as u32;
+                                self.calls.push((raw, line));
+                            }
+                        }
+                        syn::visit::visit_expr_call(self, node);
+                    }
+
+                    fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
+                        if self.calls.len() < self.max {
+                            let mut raw = node.method.to_string();
+                            if let Some(self_ty) = &self.self_ty {
+                                if rust_receiver_is_self(&node.receiver) {
+                                    raw = format!("{self_ty}::{raw}");
+                                }
+                            }
+                            let line = node.span().start().line as u32;
+                            self.calls.push((raw, line));
+                        }
+                        syn::visit::visit_expr_method_call(self, node);
                     }
                 }
-                syn::Item::Impl(impl_block) => {
-                    let self_ty = match &*impl_block.self_ty {
-                        syn::Type::Path(tp) => tp
-                            .path
-                            .segments
-                            .last()
-                            .map(|s| s.ident.to_string())
-                            .unwrap_or_else(|| "Unknown".into()),
-                        _ => "Unknown".into(),
-                    };
-                    for impl_item in &impl_block.items {
-                        if let syn::ImplItem::Fn(method) = impl_item {
-                            let fn_name = method.sig.ident.to_string();
-                            let display_name = format!("{self_ty}::{fn_name}");
-                            let caller_id =
-                                format!("{}::{}", file.file_display, display_name);
+
+                for item in &ast.items {
+                    match item {
+                        syn::Item::Fn(item_fn) => {
+                            let name = item_fn.sig.ident.to_string();
+                            let start_line = item_fn.sig.ident.span().start().line as u32;
+                            let id = add_node(
+                                &mut nodes,
+                                &mut by_file_target,
+                                &mut by_target,
+                                &file_abs,
+                                &file_display,
+                                &name,
+                                &name,
+                                start_line,
+                                "function",
+                                "rust",
+                            );
                             let mut visitor = CallVisitor {
                                 calls: Vec::new(),
                                 max: args.max_calls_per_fn,
+                                self_ty: None,
                             };
-                            visitor.visit_block(&method.block);
+                            visitor.visit_block(&item_fn.block);
                             for (raw, line) in visitor.calls {
-                                let to = resolve_callee(
-                                    &file.file_display,
-                                    &raw,
-                                    &by_file_target,
-                                    &by_target,
-                                );
-                                let resolved = to.is_some();
-                                if resolved {
-                                    edges_resolved += 1;
-                                } else if args.resolved_only {
-                                    continue;
-                                }
-                                edges.push(CallgraphEdge {
-                                    from: caller_id.clone(),
-                                    to,
-                                    to_raw: raw,
-                                    kind: "call".to_string(),
-                                    line: Some(line),
-                                    resolved,
+                                raw_edges.push(RawCallEdge {
+                                    from: id.clone(),
+                                    file_display: file_display.clone(),
+                                    raw,
+                                    line,
                                 });
                             }
                         }
+                        syn::Item::Impl(impl_block) => {
+                            let self_ty = match &*impl_block.self_ty {
+                                syn::Type::Path(tp) => tp
+                                    .path
+                                    .segments
+                                    .last()
+                                    .map(|s| s.ident.to_string())
+                                    .unwrap_or_else(|| "Unknown".into()),
+                                _ => "Unknown".into(),
+                            };
+                            for impl_item in &impl_block.items {
+                                if let syn::ImplItem::Fn(method) = impl_item {
+                                    let fn_name = method.sig.ident.to_string();
+                                    let target_name = format!("{self_ty}::{fn_name}");
+                                    let start_line = method.sig.ident.span().start().line as u32;
+                                    let id = add_node(
+                                        &mut nodes,
+                                        &mut by_file_target,
+                                        &mut by_target,
+                                        &file_abs,
+                                        &file_display,
+                                        &target_name,
+                                        &target_name,
+                                        start_line,
+                                        "method",
+                                        "rust",
+                                    );
+                                    let mut visitor = CallVisitor {
+                                        calls: Vec::new(),
+                                        max: args.max_calls_per_fn,
+                                        self_ty: Some(self_ty.clone()),
+                                    };
+                                    visitor.visit_block(&method.block);
+                                    for (raw, line) in visitor.calls {
+                                        raw_edges.push(RawCallEdge {
+                                            from: id.clone(),
+                                            file_display: file_display.clone(),
+                                            raw,
+                                            line,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
-                _ => {}
+            }
+            "ts" | "tsx" | "js" | "jsx" => {
+                let is_ts = ext == "ts" || ext == "tsx";
+                let mut parser = tree_sitter::Parser::new();
+                let language = if is_ts {
+                    tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
+                } else {
+                    tree_sitter_javascript::LANGUAGE.into()
+                };
+                parser.set_language(&language)?;
+                let tree = match parser.parse(&text, None) {
+                    Some(tree) => tree,
+                    None => {
+                        errors.push(CallgraphError {
+                            path: file_display.clone(),
+                            message: "Failed to parse TypeScript/JavaScript file".to_string(),
+                        });
+                        continue;
+                    }
+                };
+                files_scanned += 1;
+
+                let lang_label = if is_ts { "typescript" } else { "javascript" };
+                let source = text.as_bytes();
+
+                fn node_text(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+                    node.utf8_text(source).ok().map(|s| s.to_string())
+                }
+
+                fn is_fn_like(kind: &str) -> bool {
+                    matches!(
+                        kind,
+                        "function_declaration"
+                            | "function"
+                            | "arrow_function"
+                            | "generator_function"
+                            | "method_definition"
+                    )
+                }
+
+                fn js_call_raw(
+                    call_node: tree_sitter::Node,
+                    source: &[u8],
+                    class_ctx: Option<&str>,
+                ) -> Option<String> {
+                    let func = call_node.child_by_field_name("function")?;
+                    match func.kind() {
+                        "identifier" => node_text(func, source),
+                        "member_expression" => {
+                            let prop = func.child_by_field_name("property")?;
+                            let prop_name = node_text(prop, source)?;
+                            let object = func.child_by_field_name("object");
+                            if let Some(obj) = object {
+                                match obj.kind() {
+                                    "this" => class_ctx
+                                        .map(|c| format!("{c}::{prop_name}"))
+                                        .or(Some(prop_name)),
+                                    "identifier" => {
+                                        let obj_name = node_text(obj, source)?;
+                                        Some(format!("{obj_name}::{prop_name}"))
+                                    }
+                                    _ => Some(prop_name),
+                                }
+                            } else {
+                                Some(prop_name)
+                            }
+                        }
+                        _ => None,
+                    }
+                }
+
+                fn collect_js_calls(
+                    node: tree_sitter::Node,
+                    source: &[u8],
+                    class_ctx: Option<&str>,
+                    out: &mut Vec<(String, u32)>,
+                    max: usize,
+                ) {
+                    if out.len() >= max {
+                        return;
+                    }
+                    let kind = node.kind();
+                    if is_fn_like(kind) {
+                        return;
+                    }
+                    if kind == "call_expression" {
+                        if let Some(raw) = js_call_raw(node, source, class_ctx) {
+                            let line = (node.start_position().row + 1) as u32;
+                            out.push((raw, line));
+                            if out.len() >= max {
+                                return;
+                            }
+                        }
+                    }
+                    let mut cursor = node.walk();
+                    for child in node.children(&mut cursor) {
+                        collect_js_calls(child, source, class_ctx, out, max);
+                        if out.len() >= max {
+                            return;
+                        }
+                    }
+                }
+
+                fn class_name(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+                    node.child_by_field_name("name")
+                        .and_then(|n| node_text(n, source))
+                }
+
+                fn visit_node(
+                    node: tree_sitter::Node,
+                    source: &[u8],
+                    file_abs: &str,
+                    file_display: &str,
+                    lang_label: &str,
+                    class_stack: &mut Vec<String>,
+                    max_calls: usize,
+                    nodes: &mut Vec<CallgraphNode>,
+                    raw_edges: &mut Vec<RawCallEdge>,
+                    by_file_target: &mut HashMap<(String, String), Vec<String>>,
+                    by_target: &mut HashMap<String, Vec<String>>,
+                ) {
+                    match node.kind() {
+                        "class_declaration" | "class" => {
+                            if let Some(name) = class_name(node, source) {
+                                class_stack.push(name);
+                                let mut cursor = node.walk();
+                                for child in node.children(&mut cursor) {
+                                    visit_node(
+                                        child,
+                                        source,
+                                        file_abs,
+                                        file_display,
+                                        lang_label,
+                                        class_stack,
+                                        max_calls,
+                                        nodes,
+                                        raw_edges,
+                                        by_file_target,
+                                        by_target,
+                                    );
+                                }
+                                class_stack.pop();
+                                return;
+                            }
+                        }
+                        "function_declaration" => {
+                            let name = node
+                                .child_by_field_name("name")
+                                .and_then(|n| node_text(n, source));
+                            if let Some(name) = name {
+                                let start_line = (node.start_position().row + 1) as u32;
+                                let id = add_node(
+                                    nodes,
+                                    by_file_target,
+                                    by_target,
+                                    file_abs,
+                                    file_display,
+                                    &name,
+                                    &name,
+                                    start_line,
+                                    "function",
+                                    lang_label,
+                                );
+                                if let Some(body) = node.child_by_field_name("body") {
+                                    let mut calls: Vec<(String, u32)> = Vec::new();
+                                    collect_js_calls(body, source, None, &mut calls, max_calls);
+                                    for (raw, line) in calls {
+                                        raw_edges.push(RawCallEdge {
+                                            from: id.clone(),
+                                            file_display: file_display.to_string(),
+                                            raw,
+                                            line,
+                                        });
+                                    }
+                                }
+                                return;
+                            }
+                        }
+                        "method_definition" => {
+                            let name = node
+                                .child_by_field_name("name")
+                                .and_then(|n| node_text(n, source));
+                            if let (Some(name), Some(class_name)) =
+                                (name, class_stack.last().cloned())
+                            {
+                                let start_line = (node.start_position().row + 1) as u32;
+                                let target_name = format!("{class_name}::{name}");
+                                let id = add_node(
+                                    nodes,
+                                    by_file_target,
+                                    by_target,
+                                    file_abs,
+                                    file_display,
+                                    &target_name,
+                                    &target_name,
+                                    start_line,
+                                    "method",
+                                    lang_label,
+                                );
+                                if let Some(body) = node.child_by_field_name("body") {
+                                    let mut calls: Vec<(String, u32)> = Vec::new();
+                                    collect_js_calls(
+                                        body,
+                                        source,
+                                        Some(&class_name),
+                                        &mut calls,
+                                        max_calls,
+                                    );
+                                    for (raw, line) in calls {
+                                        raw_edges.push(RawCallEdge {
+                                            from: id.clone(),
+                                            file_display: file_display.to_string(),
+                                            raw,
+                                            line,
+                                        });
+                                    }
+                                }
+                                return;
+                            }
+                        }
+                        "variable_declarator" => {
+                            let name_node = node.child_by_field_name("name");
+                            let value_node = node.child_by_field_name("value");
+                            if let (Some(name_node), Some(value_node)) = (name_node, value_node) {
+                                let value_kind = value_node.kind();
+                                let is_fn = matches!(
+                                    value_kind,
+                                    "function" | "arrow_function" | "generator_function"
+                                );
+                                if is_fn {
+                                    if let Some(name) = node_text(name_node, source) {
+                                        let start_line =
+                                            (value_node.start_position().row + 1) as u32;
+                                        let id = add_node(
+                                            nodes,
+                                            by_file_target,
+                                            by_target,
+                                            file_abs,
+                                            file_display,
+                                            &name,
+                                            &name,
+                                            start_line,
+                                            "function",
+                                            lang_label,
+                                        );
+                                        if let Some(body) = value_node.child_by_field_name("body") {
+                                            let mut calls: Vec<(String, u32)> = Vec::new();
+                                            collect_js_calls(
+                                                body,
+                                                source,
+                                                class_stack.last().map(|s| s.as_str()),
+                                                &mut calls,
+                                                max_calls,
+                                            );
+                                            for (raw, line) in calls {
+                                                raw_edges.push(RawCallEdge {
+                                                    from: id.clone(),
+                                                    file_display: file_display.to_string(),
+                                                    raw,
+                                                    line,
+                                                });
+                                            }
+                                        }
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                    if is_fn_like(node.kind()) {
+                        // Don't descend into function bodies; we only want top-level functions/methods.
+                        return;
+                    }
+                    let mut cursor = node.walk();
+                    for child in node.children(&mut cursor) {
+                        visit_node(
+                            child,
+                            source,
+                            file_abs,
+                            file_display,
+                            lang_label,
+                            class_stack,
+                            max_calls,
+                            nodes,
+                            raw_edges,
+                            by_file_target,
+                            by_target,
+                        );
+                    }
+                }
+
+                let mut class_stack: Vec<String> = Vec::new();
+                visit_node(
+                    tree.root_node(),
+                    source,
+                    &file_abs,
+                    &file_display,
+                    lang_label,
+                    &mut class_stack,
+                    args.max_calls_per_fn,
+                    &mut nodes,
+                    &mut raw_edges,
+                    &mut by_file_target,
+                    &mut by_target,
+                );
+            }
+            "py" => {
+                let mut parser = tree_sitter::Parser::new();
+                let language = tree_sitter_python::LANGUAGE.into();
+                parser.set_language(&language)?;
+                let tree = match parser.parse(&text, None) {
+                    Some(tree) => tree,
+                    None => {
+                        errors.push(CallgraphError {
+                            path: file_display.clone(),
+                            message: "Failed to parse Python file".to_string(),
+                        });
+                        continue;
+                    }
+                };
+                files_scanned += 1;
+
+                let source = text.as_bytes();
+
+                fn node_text(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+                    node.utf8_text(source).ok().map(|s| s.to_string())
+                }
+
+                fn py_call_raw(
+                    call_node: tree_sitter::Node,
+                    source: &[u8],
+                    class_ctx: Option<&str>,
+                ) -> Option<String> {
+                    let func = call_node.child_by_field_name("function")?;
+                    match func.kind() {
+                        "identifier" => node_text(func, source),
+                        "attribute" => {
+                            let attr = func.child_by_field_name("attribute")?;
+                            let attr_name = node_text(attr, source)?;
+                            let obj = func.child_by_field_name("object");
+                            if let Some(obj) = obj {
+                                if obj.kind() == "identifier" {
+                                    let obj_name = node_text(obj, source)?;
+                                    if obj_name == "self" {
+                                        return class_ctx
+                                            .map(|c| format!("{c}::{attr_name}"))
+                                            .or(Some(attr_name));
+                                    }
+                                    return Some(format!("{obj_name}::{attr_name}"));
+                                }
+                            }
+                            Some(attr_name)
+                        }
+                        _ => None,
+                    }
+                }
+
+                fn is_py_fn_like(kind: &str) -> bool {
+                    matches!(kind, "function_definition" | "lambda")
+                }
+
+                fn collect_py_calls(
+                    node: tree_sitter::Node,
+                    source: &[u8],
+                    class_ctx: Option<&str>,
+                    out: &mut Vec<(String, u32)>,
+                    max: usize,
+                ) {
+                    if out.len() >= max {
+                        return;
+                    }
+                    let kind = node.kind();
+                    if is_py_fn_like(kind) {
+                        return;
+                    }
+                    if kind == "call" {
+                        if let Some(raw) = py_call_raw(node, source, class_ctx) {
+                            let line = (node.start_position().row + 1) as u32;
+                            out.push((raw, line));
+                            if out.len() >= max {
+                                return;
+                            }
+                        }
+                    }
+                    let mut cursor = node.walk();
+                    for child in node.children(&mut cursor) {
+                        collect_py_calls(child, source, class_ctx, out, max);
+                        if out.len() >= max {
+                            return;
+                        }
+                    }
+                }
+
+                fn visit_node(
+                    node: tree_sitter::Node,
+                    source: &[u8],
+                    file_abs: &str,
+                    file_display: &str,
+                    class_stack: &mut Vec<String>,
+                    max_calls: usize,
+                    nodes: &mut Vec<CallgraphNode>,
+                    raw_edges: &mut Vec<RawCallEdge>,
+                    by_file_target: &mut HashMap<(String, String), Vec<String>>,
+                    by_target: &mut HashMap<String, Vec<String>>,
+                ) {
+                    match node.kind() {
+                        "class_definition" => {
+                            if let Some(name_node) = node.child_by_field_name("name") {
+                                if let Some(name) = node_text(name_node, source) {
+                                    class_stack.push(name);
+                                    let mut cursor = node.walk();
+                                    for child in node.children(&mut cursor) {
+                                        visit_node(
+                                            child,
+                                            source,
+                                            file_abs,
+                                            file_display,
+                                            class_stack,
+                                            max_calls,
+                                            nodes,
+                                            raw_edges,
+                                            by_file_target,
+                                            by_target,
+                                        );
+                                    }
+                                    class_stack.pop();
+                                    return;
+                                }
+                            }
+                        }
+                        "function_definition" => {
+                            let name = node
+                                .child_by_field_name("name")
+                                .and_then(|n| node_text(n, source));
+                            if let Some(name) = name {
+                                let start_line = (node.start_position().row + 1) as u32;
+                                let (target_name, kind, class_ctx) =
+                                    if let Some(cls) = class_stack.last() {
+                                        (format!("{cls}::{name}"), "method", Some(cls.as_str()))
+                                    } else {
+                                        (name.clone(), "function", None)
+                                    };
+
+                                let id = add_node(
+                                    nodes,
+                                    by_file_target,
+                                    by_target,
+                                    file_abs,
+                                    file_display,
+                                    &target_name,
+                                    &target_name,
+                                    start_line,
+                                    kind,
+                                    "python",
+                                );
+
+                                if let Some(body) = node.child_by_field_name("body") {
+                                    let mut calls: Vec<(String, u32)> = Vec::new();
+                                    collect_py_calls(
+                                        body, source, class_ctx, &mut calls, max_calls,
+                                    );
+                                    for (raw, line) in calls {
+                                        raw_edges.push(RawCallEdge {
+                                            from: id.clone(),
+                                            file_display: file_display.to_string(),
+                                            raw,
+                                            line,
+                                        });
+                                    }
+                                }
+                                return;
+                            }
+                        }
+                        _ => {}
+                    }
+
+                    if is_py_fn_like(node.kind()) {
+                        // Don't descend into nested functions.
+                        return;
+                    }
+
+                    let mut cursor = node.walk();
+                    for child in node.children(&mut cursor) {
+                        visit_node(
+                            child,
+                            source,
+                            file_abs,
+                            file_display,
+                            class_stack,
+                            max_calls,
+                            nodes,
+                            raw_edges,
+                            by_file_target,
+                            by_target,
+                        );
+                    }
+                }
+
+                let mut class_stack: Vec<String> = Vec::new();
+                visit_node(
+                    tree.root_node(),
+                    source,
+                    &file_abs,
+                    &file_display,
+                    &mut class_stack,
+                    args.max_calls_per_fn,
+                    &mut nodes,
+                    &mut raw_edges,
+                    &mut by_file_target,
+                    &mut by_target,
+                );
+            }
+            _ => {}
+        }
+    }
+
+    // Resolve raw call sites to unique targets when possible.
+    let mut edges: Vec<CallgraphEdge> = Vec::new();
+    let mut edges_resolved = 0usize;
+
+    for raw_edge in raw_edges {
+        let to = resolve_callee(
+            &raw_edge.file_display,
+            &raw_edge.raw,
+            &by_file_target,
+            &by_target,
+        );
+        let resolved = to.is_some();
+        if resolved {
+            edges_resolved += 1;
+        } else if args.resolved_only {
+            continue;
+        }
+        edges.push(CallgraphEdge {
+            from: raw_edge.from,
+            to,
+            to_raw: raw_edge.raw,
+            kind: "call".to_string(),
+            line: Some(raw_edge.line),
+            resolved,
+        });
+    }
+
+    // Compute degrees and hub stats (resolved edges only).
+    let mut in_counts: HashMap<String, u32> = HashMap::new();
+    let mut out_counts: HashMap<String, u32> = HashMap::new();
+    for n in &nodes {
+        in_counts.insert(n.id.clone(), 0);
+        out_counts.insert(n.id.clone(), 0);
+    }
+    for e in edges.iter().filter(|e| e.resolved) {
+        if let Some(to) = &e.to {
+            if let Some(out) = out_counts.get_mut(&e.from) {
+                *out += 1;
+            }
+            if let Some(inc) = in_counts.get_mut(to) {
+                *inc += 1;
             }
         }
     }
+    for n in &mut nodes {
+        n.in_calls = *in_counts.get(&n.id).unwrap_or(&0);
+        n.out_calls = *out_counts.get(&n.id).unwrap_or(&0);
+        n.total_calls = n.in_calls + n.out_calls;
+    }
+
+    let orphan_nodes = nodes.iter().filter(|n| n.total_calls == 0).count();
+    let sink_nodes = nodes
+        .iter()
+        .filter(|n| n.in_calls > 0 && n.out_calls == 0)
+        .count();
+    let source_nodes = nodes
+        .iter()
+        .filter(|n| n.out_calls > 0 && n.in_calls == 0)
+        .count();
+
+    let mut by_language: BTreeMap<String, usize> = BTreeMap::new();
+    for n in &nodes {
+        *by_language.entry(n.language.clone()).or_insert(0) += 1;
+    }
+
+    let mut hubs: Vec<CallgraphHub> = nodes
+        .iter()
+        .filter(|n| n.total_calls > 0)
+        .map(|n| CallgraphHub {
+            id: n.id.clone(),
+            display_name: n.display_name.clone(),
+            in_calls: n.in_calls,
+            out_calls: n.out_calls,
+            total_calls: n.total_calls,
+            file_display: n.file_display.clone(),
+            start_line: n.start_line,
+            language: n.language.clone(),
+        })
+        .collect();
+    hubs.sort_by(|a, b| {
+        b.total_calls
+            .cmp(&a.total_calls)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    hubs.truncate(10);
+
+    nodes.sort_by(|a, b| a.id.cmp(&b.id));
+    edges.sort_by(|a, b| {
+        a.from
+            .cmp(&b.from)
+            .then_with(|| a.line.cmp(&b.line))
+            .then_with(|| a.to_raw.cmp(&b.to_raw))
+    });
 
     let node_count = nodes.len();
     let edge_count = edges.len();
@@ -3206,10 +3852,15 @@ fn run_flow_callgraph(args: FlowCallgraphArgs) -> anyhow::Result<()> {
         nodes,
         edges,
         stats: CallgraphStats {
-            files_scanned: parsed.len(),
+            files_scanned,
             nodes: node_count,
             edges: edge_count,
             edges_resolved,
+            orphan_nodes,
+            sink_nodes,
+            source_nodes,
+            by_language,
+            top_hubs: hubs,
         },
         errors,
     };

@@ -109,19 +109,19 @@ pub struct CallSite {
 pub struct SymbolGraph {
     /// Exports from each file: path -> list of exports
     pub exports: HashMap<PathBuf, Vec<ExportedSymbol>>,
-    
+
     /// Imports into each file: path -> list of imports
     pub imports: HashMap<PathBuf, Vec<ImportRef>>,
-    
+
     /// Type usages by symbol name: symbol_name -> list of usage sites
     pub type_usages: HashMap<String, Vec<UsageSite>>,
-    
+
     /// Call sites by function name: function_name -> list of call sites
     pub call_sites: HashMap<String, Vec<CallSite>>,
-    
+
     /// Entry points detected in the project
     pub entry_points: Vec<EntryPoint>,
-    
+
     /// Reachable symbols from entry points (computed lazily)
     #[serde(skip)]
     pub reachable_cache: Option<HashSet<String>>,
@@ -210,7 +210,11 @@ impl SymbolGraph {
     pub fn is_used_as_type_annotation(&self, name: &str) -> bool {
         self.type_usages
             .get(name)
-            .map(|usages| usages.iter().any(|u| u.usage_kind == UsageKind::TypeAnnotation))
+            .map(|usages| {
+                usages
+                    .iter()
+                    .any(|u| u.usage_kind == UsageKind::TypeAnnotation)
+            })
             .unwrap_or(false)
     }
 
@@ -226,7 +230,12 @@ impl SymbolGraph {
     pub fn implementation_count(&self, name: &str) -> usize {
         self.type_usages
             .get(name)
-            .map(|usages| usages.iter().filter(|u| u.usage_kind == UsageKind::Implements).count())
+            .map(|usages| {
+                usages
+                    .iter()
+                    .filter(|u| u.usage_kind == UsageKind::Implements)
+                    .count()
+            })
             .unwrap_or(0)
     }
 
@@ -234,7 +243,12 @@ impl SymbolGraph {
     pub fn type_annotation_count(&self, name: &str) -> usize {
         self.type_usages
             .get(name)
-            .map(|usages| usages.iter().filter(|u| u.usage_kind == UsageKind::TypeAnnotation).count())
+            .map(|usages| {
+                usages
+                    .iter()
+                    .filter(|u| u.usage_kind == UsageKind::TypeAnnotation)
+                    .count()
+            })
             .unwrap_or(0)
     }
 
@@ -357,7 +371,7 @@ pub fn build_ts_symbol_graph(files: &[(PathBuf, String)]) -> SymbolGraph {
     let mut graph = SymbolGraph::default();
     let mut parser = Parser::new();
     let lang = tree_sitter_typescript::LANGUAGE_TYPESCRIPT;
-    
+
     if parser.set_language(&lang.into()).is_err() {
         return graph;
     }
@@ -368,7 +382,7 @@ pub fn build_ts_symbol_graph(files: &[(PathBuf, String)]) -> SymbolGraph {
         };
 
         let root = tree.root_node();
-        
+
         // Extract exports, imports, and usages
         extract_ts_symbols(&mut graph, path, &root, content);
     }
@@ -402,7 +416,7 @@ fn extract_ts_symbols(
                         .child_by_field_name("name")
                         .map(|n| node_text(n, content))
                         .unwrap_or_default();
-                    
+
                     if !name.is_empty() {
                         graph.add_export(
                             path.to_path_buf(),
@@ -434,7 +448,7 @@ fn extract_ts_symbols(
                     let source_module = node_text(source, content)
                         .trim_matches(|c| c == '"' || c == '\'')
                         .to_string();
-                    
+
                     // Find imported names
                     if let Some(clause) = node.child_by_field_name("import_clause") {
                         for i in 0..clause.child_count() {
@@ -508,8 +522,10 @@ fn extract_ts_symbols(
                 if let Some(func) = node.child_by_field_name("function") {
                     let callee = node_text(func, content);
                     let args = node.child_by_field_name("arguments");
-                    let arg_count = args.map(|a| a.child_count().saturating_sub(2) / 2).unwrap_or(0);
-                    
+                    let arg_count = args
+                        .map(|a| a.child_count().saturating_sub(2) / 2)
+                        .unwrap_or(0);
+
                     graph.add_call_site(
                         callee.clone(),
                         CallSite {
@@ -543,7 +559,7 @@ mod tests {
     #[test]
     fn test_symbol_graph_basic() {
         let mut graph = SymbolGraph::default();
-        
+
         graph.add_type_usage(
             "MyInterface".to_string(),
             UsageSite {
@@ -575,7 +591,7 @@ mod tests {
                 reason: "Internal symbol".to_string(),
             },
         ];
-        
+
         let score = ConfidenceScore::new(factors);
         assert!((score.score - 0.5).abs() < 0.001);
         assert!(!score.is_high());

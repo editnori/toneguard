@@ -1,6 +1,7 @@
 ﻿# Release checklist
 
-Whenever you cut a new ToneGuard release (tag and VSIX), make sure you also publish both Rust crates so the global `cargo install dwg-cli` flow keeps working.
+This repo uses tags + a VSIX for local installs.
+If you want `cargo install dwg-cli` to work for everyone, you also need to publish both crates.
 
 1. Update versions in:
    - `core/Cargo.toml`
@@ -19,7 +20,10 @@ Whenever you cut a new ToneGuard release (tag and VSIX), make sure you also publ
    cargo test --workspace
    ./scripts/install-local.sh
    ```
-5. Upload the VSIX to the marketplaces.
+5. (Optional) Run the blueprint refactor guard against the previous tag:
+   ```bash
+   ./scripts/blueprint-refactor-guard.sh --base <tag> --require
+   ```
+6. Upload the VSIX to the marketplaces.
 
 Skip step 3 only if the crate version already exists on crates.io. Otherwise the extension's global install path will break.
-

@@ -13,8 +13,9 @@ What you get:
 - Flow guardrails (flow specs, audits, proposal artifacts)
 - Blueprint graph (repo-wide file dependency map)
 - Blueprint diff (refactor guard: require a mapping for removed files)
-- Function index + CFG output (JSON or Mermaid)
-- Dashboard + Flow Map UI in VS Code
+- Call graph (Rust + TS/JS/Py) with hub/orphan stats
+- Function index + CFG output (JSON + optional Mermaid)
+- Dashboard + Flow Map UI in VS Code (Blueprint / Calls / CFG)
 
 ## Quickstart
 
@@ -40,6 +41,15 @@ Build a VSIX and install it locally. The extension bundles `dwg-lsp` and `dwg` f
 ```
 
 Open the ToneGuard view, click **Run**, then review the files written to `reports/`.
+
+Common outputs:
+
+- `reports/markdown-lint.json`: Markdown/text findings + repo hygiene issues
+- `reports/flow-audit.json`: logic findings (pass-through wrappers, duplication, etc.)
+- `reports/flow-proposal.md`: review artifact for logic changes
+- `reports/flow-index.json`: function/method index (best-effort)
+- `reports/flow-blueprint.json`: file dependency graph (best-effort)
+- `reports/flow-callgraph.json`: function call graph (best-effort)
 
 ### Flow tools
 
@@ -67,6 +77,14 @@ dwg-cli flow blueprint --out reports/flow-blueprint.after.json .
 dwg-cli flow blueprint diff --before reports/flow-blueprint.before.json --after reports/flow-blueprint.after.json --write-mapping reports/flow-blueprint-mapping.yml
 dwg-cli flow blueprint diff --before reports/flow-blueprint.before.json --after reports/flow-blueprint.after.json --require-mapping reports/flow-blueprint-mapping.yml
 ```
+
+For CI-style guardrails against silent deletes/moves, use:
+
+```bash
+./scripts/blueprint-refactor-guard.sh --require
+```
+
+This expects a committed mapping file at `flow-blueprint-mapping.yml`. When the guard fails, copy entries from `reports/flow-blueprint-mapping.template.yml` into `flow-blueprint-mapping.yml`, set actions (`deleted`, `moved`, `renamed`, `merged`, `split`), and commit it with the refactor.
 
 ### Organizer
 
