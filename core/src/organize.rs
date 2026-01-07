@@ -7,12 +7,35 @@
 //! - Untracked experiment files
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
+
+const OUTPUT_DIR_HINTS: &[&str] = &[
+    "output",
+    "outputs",
+    "out",
+    "results",
+    "artifacts",
+    "generated",
+    "exports",
+    "export",
+    "tmp",
+    "temp",
+];
+
+const EXPERIMENT_NAME_HINTS: &[&str] = &[
+    "test",
+    "scratch",
+    "temp",
+    "debug",
+    "poc",
+    "experiment",
+    "analysis",
+];
 
 /// The detected type/flavor of a repository.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -104,6 +127,8 @@ pub struct OrganizationFinding {
 pub struct OrganizeConfig {
     /// Minimum file size (bytes) to flag as "data file"
     pub data_file_min_size: u64,
+    /// Optional KB override from config (normalized to bytes on load)
+    pub data_file_min_kb: Option<u64>,
     /// Extensions considered as data files
     pub data_extensions: Vec<String>,
     /// Extensions considered as scripts
@@ -124,6 +149,7 @@ impl Default for OrganizeConfig {
     fn default() -> Self {
         Self {
             data_file_min_size: 100 * 1024, // 100KB
+            data_file_min_kb: None,
             data_extensions: vec![
                 "csv".into(),
                 "xlsx".into(),
@@ -156,12 +182,23 @@ impl Default for OrganizeConfig {
                 "bin".into(),
                 "tools".into(),
                 "utils".into(),
+                "scratch".into(),
+                "experiments".into(),
+                "analysis".into(),
+                "poc".into(),
             ],
             data_directories: vec![
                 "data".into(),
                 "assets".into(),
                 "fixtures".into(),
                 "testdata".into(),
+                "public".into(),
+                "output".into(),
+                "outputs".into(),
+                "reports".into(),
+                "artifacts".into(),
+                "exports".into(),
+                "export".into(),
             ],
             ignore_globs: vec![
                 "node_modules/**".into(),
@@ -374,6 +411,28 @@ fn is_legacy_file(filename: &str, patterns: &[String]) -> Option<String> {
     None
 }
 
+fn output_dir_prefix(relative: &Path) -> Option<PathBuf> {
+    let parent = relative.parent().unwrap_or(relative);
+    let mut prefix = PathBuf::new();
+    for comp in parent.components() {
+        if let Component::Normal(os_str) = comp {
+            let name = os_str.to_string_lossy().to_lowercase();
+            prefix.push(os_str);
+            if OUTPUT_DIR_HINTS.iter().any(|hint| hint == &name) {
+                return Some(prefix);
+            }
+        }
+    }
+    None
+}
+
+fn looks_experimental(filename: &str) -> bool {
+    let lower = filename.to_lowercase();
+    EXPERIMENT_NAME_HINTS
+        .iter()
+        .any(|hint| lower.contains(hint))
+}
+
 /// Check if a path is in a "source" directory (not data/scripts).
 fn is_in_source_dir(path: &Path, _repo_type: &RepoType, config: &OrganizeConfig) -> bool {
     let path_str = path.to_string_lossy().to_lowercase();
@@ -488,6 +547,21 @@ pub fn analyze_organization(root: &Path, config: &OrganizeConfig) -> anyhow::Res
             true
         };
 
+        if !git_tracked {
+            if let Some(output_dir) = output_dir_prefix(relative) {
+                findings.push(OrganizationFinding {
+                    path: path.to_path_buf(),
+                    issue: IssueKind::UntrackedExperiment,
+                    suggested_action: Action::Gitignore,
+                    target_path: Some(output_dir),
+                    reason: "untracked file in output directory".into(),
+                    size_bytes: file_size(path),
+                    git_tracked,
+                });
+                continue;
+            }
+        }
+
         // Check for legacy/backup files
         if let Some(reason) = is_legacy_file(&filename, &config.legacy_patterns) {
             findings.push(OrganizationFinding {
@@ -563,12 +637,7 @@ pub fn analyze_organization(root: &Path, config: &OrganizeConfig) -> anyhow::Res
         // Check for untracked experiments
         if !git_tracked && script_exts.contains(&extension) {
             // Heuristics for "experiment" scripts
-            let looks_experimental = filename.contains("test")
-                || filename.contains("scratch")
-                || filename.contains("temp")
-                || filename.contains("debug")
-                || filename.contains("poc")
-                || filename.contains("experiment");
+            let looks_experimental = looks_experimental(&filename);
 
             if looks_experimental {
                 findings.push(OrganizationFinding {
@@ -698,9 +767,13 @@ pub fn generate_organize_prompt(report: &OrganizationReport, agent: &str) -> Str
                         prompt.push_str(&format!("rm \"{}\"\n", finding.path.display()));
                     }
                     Action::Gitignore => {
+                        let target = finding
+                            .target_path
+                            .as_ref()
+                            .unwrap_or(&finding.path);
                         prompt.push_str(&format!(
                             "echo \"{}\" >> .gitignore\n",
-                            finding.path.display()
+                            target.display()
                         ));
                     }
                 }
@@ -716,6 +789,7 @@ pub fn generate_organize_prompt(report: &OrganizationReport, agent: &str) -> Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn test_is_legacy_file() {
@@ -742,5 +816,19 @@ mod tests {
             expected_structure: vec!["crates/".into(), "cli/".into()],
         };
         assert_eq!(report.kind, RepoKind::RustWorkspace);
+    }
+
+    #[test]
+    fn test_output_dir_prefix() {
+        let path = Path::new("poc/output/results.json");
+        let prefix = output_dir_prefix(path).expect("output dir prefix");
+        assert_eq!(prefix, PathBuf::from("poc/output"));
+    }
+
+    #[test]
+    fn test_looks_experimental() {
+        assert!(looks_experimental("scratch_notes.py"));
+        assert!(looks_experimental("analysis_v2.ipynb"));
+        assert!(!looks_experimental("main.rs"));
     }
 }

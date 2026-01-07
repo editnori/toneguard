@@ -3,7 +3,9 @@
 node_modules
 vscode-extension/out
 vscode-extension/node_modules
+vscode-extension/media
 *.vsix
 vscode-extension/bin/*/dwg-lsp*
 vscode-extension/bin/*/dwg*
 vscode-extension/*.vsix
+reports/

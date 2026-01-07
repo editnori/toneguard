@@ -165,11 +165,6 @@ pub enum EntryPointKind {
 }
 
 impl SymbolGraph {
-    /// Create a new empty symbol graph
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Add an export to the graph
     pub fn add_export(&mut self, path: PathBuf, export: ExportedSymbol) {
         self.exports.entry(path).or_default().push(export);
@@ -359,7 +354,7 @@ impl ConfidenceScore {
 pub fn build_ts_symbol_graph(files: &[(PathBuf, String)]) -> SymbolGraph {
     use tree_sitter::Parser;
 
-    let mut graph = SymbolGraph::new();
+    let mut graph = SymbolGraph::default();
     let mut parser = Parser::new();
     let lang = tree_sitter_typescript::LANGUAGE_TYPESCRIPT;
     
@@ -547,7 +542,7 @@ mod tests {
 
     #[test]
     fn test_symbol_graph_basic() {
-        let mut graph = SymbolGraph::new();
+        let mut graph = SymbolGraph::default();
         
         graph.add_type_usage(
             "MyInterface".to_string(),

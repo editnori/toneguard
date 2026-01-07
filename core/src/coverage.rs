@@ -108,11 +108,6 @@ pub struct CoverageData {
 }
 
 impl CoverageData {
-    /// Create empty coverage data
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Parse coverage from a file, auto-detecting format
     pub fn from_file(path: &Path) -> Result<Self> {
         let format = CoverageFormat::detect(path)
@@ -130,7 +125,7 @@ impl CoverageData {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read {}", path.display()))?;
 
-        let mut data = Self::new();
+        let mut data = Self::default();
         data.format = Some(CoverageFormat::Lcov);
 
         let mut current_file: Option<PathBuf> = None;
@@ -215,7 +210,7 @@ impl CoverageData {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read {}", path.display()))?;
 
-        let mut data = Self::new();
+        let mut data = Self::default();
         data.format = Some(CoverageFormat::Istanbul);
 
         // Istanbul format is a JSON object where keys are file paths
@@ -307,7 +302,7 @@ impl CoverageData {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read {}", path.display()))?;
 
-        let mut data = Self::new();
+        let mut data = Self::default();
         data.format = Some(CoverageFormat::Cobertura);
 
         // Very basic XML parsing for line coverage

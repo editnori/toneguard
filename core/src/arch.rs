@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "lowercase")]
 pub enum Language {
     #[default]
     Rust,

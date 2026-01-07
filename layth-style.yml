@@ -420,6 +420,10 @@ repo_rules:
     - "**/dist/**"
     - "**/build/**"
     - "**/.git/**"
+    - "reports/**"
+    - "**/reports/**"
+    - "**/flow-proposal.md"
+    - "**/flow-audit.json"
     - "target/**"
     - "**/target/**"
     - "**/out/**"
@@ -437,11 +441,72 @@ repo_rules:
     - "**/SKILL.md"
     - "**/AGENT.md"
     - "**/CLAUDE.md"
+    # ToneGuard extension templates (these intentionally contain banned examples)
+    - "vscode-extension/skills/**"
+    - "**/vscode-extension/skills/**"
+    # ToneGuard repo docs/examples intentionally mention flagged phrases.
+    - "docs/**"
+    - "**/docs/**"
+    - "examples/**"
+    - "**/examples/**"
+    - "vscode-extension/README.md"
+    - "**/vscode-extension/README.md"
+    # Generated VS Code webview bundles (Vite output)
+    - "vscode-extension/media/**"
+    - "**/vscode-extension/media/**"
 comment_policy:
   enabled: false
   max_ratio: 0.05
   ignore_globs: []
   allow_globs: []
+organize_rules:
+  data_file_min_kb: 100
+  data_extensions:
+    - csv
+    - xlsx
+    - xls
+    - json
+    - parquet
+    - sqlite
+    - db
+  script_extensions:
+    - py
+    - sh
+    - bash
+    - ps1
+    - rb
+    - pl
+  legacy_patterns:
+    - "*_v[0-9]*"
+    - "*_old*"
+    - "*.bak"
+    - "*~"
+    - "*.orig"
+    - "*_backup*"
+    - "*_copy*"
+    - "Copy of *"
+  script_directories:
+    - scripts
+    - bin
+    - tools
+    - utils
+    - scratch
+    - experiments
+    - analysis
+    - poc
+  data_directories:
+    - data
+    - assets
+    - fixtures
+    - testdata
+    - public
+    - output
+    - outputs
+    - reports
+    - artifacts
+    - exports
+    - export
+  check_git_status: true
 flow_rules:
   indirection_budget: 5
   min_steps: 3

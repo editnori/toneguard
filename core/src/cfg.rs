@@ -433,6 +433,63 @@ impl ControlFlowGraph {
     }
 }
 
+fn add_flow_node(
+    cfg: &mut ControlFlowGraph,
+    current_node: NodeId,
+    kind: NodeKind,
+    line: u32,
+) -> NodeId {
+    let node = cfg.add_node(kind, (line, line));
+    cfg.add_edge(current_node, node, EdgeKind::Fallthrough, None);
+    node
+}
+
+fn add_implicit_return_if_needed(cfg: &mut ControlFlowGraph, current_node: NodeId) {
+    if let Some(node) = cfg.nodes.get(current_node as usize) {
+        match node.kind {
+            NodeKind::Return | NodeKind::Exit | NodeKind::Panic | NodeKind::Diverge => {}
+            _ => {
+                let ret = cfg.add_node(NodeKind::Return, node.source_range);
+                cfg.add_edge(current_node, ret, EdgeKind::Fallthrough, None);
+            }
+        }
+    }
+}
+
+fn handle_return(cfg: &mut ControlFlowGraph, current_node: &mut NodeId, line: u32) {
+    *current_node = add_flow_node(cfg, *current_node, NodeKind::Return, line);
+}
+
+fn handle_panic(cfg: &mut ControlFlowGraph, current_node: &mut NodeId, line: u32) {
+    *current_node = add_flow_node(cfg, *current_node, NodeKind::Panic, line);
+}
+
+fn handle_break(
+    cfg: &mut ControlFlowGraph,
+    current_node: &mut NodeId,
+    loop_stack: &[(NodeId, NodeId)],
+    line: u32,
+) {
+    let break_node = add_flow_node(cfg, *current_node, NodeKind::Break, line);
+    if let Some((_header, exit)) = loop_stack.last() {
+        cfg.add_edge(break_node, *exit, EdgeKind::LoopExit, None);
+    }
+    *current_node = break_node;
+}
+
+fn handle_continue(
+    cfg: &mut ControlFlowGraph,
+    current_node: &mut NodeId,
+    loop_stack: &[(NodeId, NodeId)],
+    line: u32,
+) {
+    let continue_node = add_flow_node(cfg, *current_node, NodeKind::Continue, line);
+    if let Some((header, _exit)) = loop_stack.last() {
+        cfg.add_edge(continue_node, *header, EdgeKind::LoopBack, None);
+    }
+    *current_node = continue_node;
+}
+
 /// Statistics about a CFG
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CfgStats {
@@ -451,10 +508,6 @@ pub struct ProjectCfg {
 }
 
 impl ProjectCfg {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn add(&mut self, cfg: ControlFlowGraph) {
         let key = (cfg.path.clone(), cfg.name.clone());
         self.cfgs.insert(key, cfg);
@@ -566,16 +619,7 @@ impl<'a> RustCfgBuilder<'a> {
     }
 
     fn finalize(&mut self) {
-        // If the last node isn't an exit, add implicit return
-        if let Some(node) = self.cfg.nodes.get(self.current_node as usize) {
-            match node.kind {
-                NodeKind::Return | NodeKind::Exit | NodeKind::Panic | NodeKind::Diverge => {}
-                _ => {
-                    let ret = self.cfg.add_node(NodeKind::Return, node.source_range);
-                    self.cfg.add_edge(self.current_node, ret, EdgeKind::Fallthrough, None);
-                }
-            }
-        }
+        add_implicit_return_if_needed(self.cfg, self.current_node);
     }
 
     fn visit_block(&mut self, block: &syn::Block) {
@@ -878,38 +922,17 @@ impl<'a> RustCfgBuilder<'a> {
 
     fn visit_return(&mut self, expr_return: &syn::ExprReturn) {
         let line = expr_return.return_token.span.start().line as u32;
-        
-        let ret_node = self.cfg.add_node(NodeKind::Return, (line, line));
-        self.cfg.add_edge(self.current_node, ret_node, EdgeKind::Fallthrough, None);
-        self.current_node = ret_node;
+        handle_return(self.cfg, &mut self.current_node, line);
     }
 
     fn visit_break(&mut self, expr_break: &syn::ExprBreak) {
         let line = expr_break.break_token.span.start().line as u32;
-        
-        let break_node = self.cfg.add_node(NodeKind::Break, (line, line));
-        self.cfg.add_edge(self.current_node, break_node, EdgeKind::Fallthrough, None);
-        
-        // Connect to loop exit
-        if let Some((_header, exit)) = self.loop_stack.last() {
-            self.cfg.add_edge(break_node, *exit, EdgeKind::LoopExit, None);
-        }
-        
-        self.current_node = break_node;
+        handle_break(self.cfg, &mut self.current_node, &self.loop_stack, line);
     }
 
     fn visit_continue(&mut self, expr_continue: &syn::ExprContinue) {
         let line = expr_continue.continue_token.span.start().line as u32;
-        
-        let continue_node = self.cfg.add_node(NodeKind::Continue, (line, line));
-        self.cfg.add_edge(self.current_node, continue_node, EdgeKind::Fallthrough, None);
-        
-        // Connect to loop header
-        if let Some((header, _exit)) = self.loop_stack.last() {
-            self.cfg.add_edge(continue_node, *header, EdgeKind::LoopBack, None);
-        }
-        
-        self.current_node = continue_node;
+        handle_continue(self.cfg, &mut self.current_node, &self.loop_stack, line);
     }
 
     fn visit_macro(&mut self, stmt_macro: &syn::StmtMacro) {
@@ -1133,15 +1156,7 @@ impl<'a> TsCfgBuilder<'a> {
     }
 
     fn finalize(&mut self) {
-        if let Some(node) = self.cfg.nodes.get(self.current_node as usize) {
-            match node.kind {
-                NodeKind::Return | NodeKind::Exit | NodeKind::Panic | NodeKind::Diverge => {}
-                _ => {
-                    let ret = self.cfg.add_node(NodeKind::Return, node.source_range);
-                    self.cfg.add_edge(self.current_node, ret, EdgeKind::Fallthrough, None);
-                }
-            }
-        }
+        add_implicit_return_if_needed(self.cfg, self.current_node);
     }
 
     fn visit_node(&mut self, node: &tree_sitter::Node) {
@@ -1375,45 +1390,25 @@ impl<'a> TsCfgBuilder<'a> {
 
     fn visit_return(&mut self, node: &tree_sitter::Node) {
         let line = node.start_position().row as u32 + 1;
-        let ret_node = self.cfg.add_node(NodeKind::Return, (line, line));
-        self.cfg.add_edge(self.current_node, ret_node, EdgeKind::Fallthrough, None);
-        self.current_node = ret_node;
+        handle_return(self.cfg, &mut self.current_node, line);
     }
 
     fn visit_break(&mut self, node: &tree_sitter::Node) {
         let line = node.start_position().row as u32 + 1;
-        let break_node = self.cfg.add_node(NodeKind::Break, (line, line));
-        self.cfg.add_edge(self.current_node, break_node, EdgeKind::Fallthrough, None);
-        
-        if let Some((_header, exit)) = self.loop_stack.last() {
-            self.cfg.add_edge(break_node, *exit, EdgeKind::LoopExit, None);
-        }
-        
-        self.current_node = break_node;
+        handle_break(self.cfg, &mut self.current_node, &self.loop_stack, line);
     }
 
     fn visit_continue(&mut self, node: &tree_sitter::Node) {
         let line = node.start_position().row as u32 + 1;
-        let continue_node = self.cfg.add_node(NodeKind::Continue, (line, line));
-        self.cfg.add_edge(self.current_node, continue_node, EdgeKind::Fallthrough, None);
-        
-        if let Some((header, _exit)) = self.loop_stack.last() {
-            self.cfg.add_edge(continue_node, *header, EdgeKind::LoopBack, None);
-        }
-        
-        self.current_node = continue_node;
+        handle_continue(self.cfg, &mut self.current_node, &self.loop_stack, line);
     }
 
     fn visit_throw(&mut self, node: &tree_sitter::Node) {
         let line = node.start_position().row as u32 + 1;
-        let throw_node = self.cfg.add_node(NodeKind::Panic, (line, line));
-        self.cfg.add_edge(self.current_node, throw_node, EdgeKind::Fallthrough, None);
-        self.current_node = throw_node;
+        handle_panic(self.cfg, &mut self.current_node, line);
     }
 
     fn visit_try(&mut self, node: &tree_sitter::Node) {
-        let line = node.start_position().row as u32 + 1;
-        
         let end_line = node.end_position().row as u32 + 1;
         let merge_node = self.cfg.add_node(NodeKind::Block, (end_line, end_line));
 
@@ -1587,15 +1582,7 @@ impl<'a> PyCfgBuilder<'a> {
     }
 
     fn finalize(&mut self) {
-        if let Some(node) = self.cfg.nodes.get(self.current_node as usize) {
-            match node.kind {
-                NodeKind::Return | NodeKind::Exit | NodeKind::Panic | NodeKind::Diverge => {}
-                _ => {
-                    let ret = self.cfg.add_node(NodeKind::Return, node.source_range);
-                    self.cfg.add_edge(self.current_node, ret, EdgeKind::Fallthrough, None);
-                }
-            }
-        }
+        add_implicit_return_if_needed(self.cfg, self.current_node);
     }
 
     fn visit_node(&mut self, node: &tree_sitter::Node) {
@@ -1777,44 +1764,25 @@ impl<'a> PyCfgBuilder<'a> {
 
     fn visit_return(&mut self, node: &tree_sitter::Node) {
         let line = node.start_position().row as u32 + 1;
-        let ret_node = self.cfg.add_node(NodeKind::Return, (line, line));
-        self.cfg.add_edge(self.current_node, ret_node, EdgeKind::Fallthrough, None);
-        self.current_node = ret_node;
+        handle_return(self.cfg, &mut self.current_node, line);
     }
 
     fn visit_break(&mut self, node: &tree_sitter::Node) {
         let line = node.start_position().row as u32 + 1;
-        let break_node = self.cfg.add_node(NodeKind::Break, (line, line));
-        self.cfg.add_edge(self.current_node, break_node, EdgeKind::Fallthrough, None);
-        
-        if let Some((_header, exit)) = self.loop_stack.last() {
-            self.cfg.add_edge(break_node, *exit, EdgeKind::LoopExit, None);
-        }
-        
-        self.current_node = break_node;
+        handle_break(self.cfg, &mut self.current_node, &self.loop_stack, line);
     }
 
     fn visit_continue(&mut self, node: &tree_sitter::Node) {
         let line = node.start_position().row as u32 + 1;
-        let continue_node = self.cfg.add_node(NodeKind::Continue, (line, line));
-        self.cfg.add_edge(self.current_node, continue_node, EdgeKind::Fallthrough, None);
-        
-        if let Some((header, _exit)) = self.loop_stack.last() {
-            self.cfg.add_edge(continue_node, *header, EdgeKind::LoopBack, None);
-        }
-        
-        self.current_node = continue_node;
+        handle_continue(self.cfg, &mut self.current_node, &self.loop_stack, line);
     }
 
     fn visit_raise(&mut self, node: &tree_sitter::Node) {
         let line = node.start_position().row as u32 + 1;
-        let raise_node = self.cfg.add_node(NodeKind::Panic, (line, line));
-        self.cfg.add_edge(self.current_node, raise_node, EdgeKind::Fallthrough, None);
-        self.current_node = raise_node;
+        handle_panic(self.cfg, &mut self.current_node, line);
     }
 
     fn visit_try(&mut self, node: &tree_sitter::Node) {
-        let line = node.start_position().row as u32 + 1;
         let end_line = node.end_position().row as u32 + 1;
         let merge_node = self.cfg.add_node(NodeKind::Block, (end_line, end_line));
 

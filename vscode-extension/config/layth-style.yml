@@ -424,6 +424,12 @@ repo_rules:
     - "**/reports/**"
     - "**/flow-proposal.md"
     - "**/flow-audit.json"
+    # ToneGuard extension templates (these intentionally contain banned examples)
+    - "vscode-extension/skills/**"
+    - "**/vscode-extension/skills/**"
+    # Generated VS Code webview bundles (Vite output)
+    - "vscode-extension/media/**"
+    - "**/vscode-extension/media/**"
     - "target/**"
     - "**/target/**"
     - "**/out/**"
@@ -476,11 +482,22 @@ organize_rules:
     - bin
     - tools
     - utils
+    - scratch
+    - experiments
+    - analysis
+    - poc
   # Directories where data files are expected
   data_directories:
     - data
     - assets
     - fixtures
     - testdata
+    - public
+    - output
+    - outputs
+    - reports
+    - artifacts
+    - exports
+    - export
   # Check git status for untracked experiments
   check_git_status: true

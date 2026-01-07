@@ -14,6 +14,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 pub mod arch;
+pub mod blueprint;
 pub mod cfg;
 pub mod coverage;
 pub mod dfg;
@@ -308,6 +309,10 @@ impl Default for RepoRules {
                 "build/**".into(),
                 "**/.git/**".into(),
                 "target/**".into(),
+                "reports/**".into(),
+                "**/reports/**".into(),
+                "**/flow-proposal.md".into(),
+                "**/flow-audit.json".into(),
                 "**/node_modules/**".into(),
                 "**/dist/**".into(),
                 "**/build/**".into(),
@@ -1558,7 +1563,7 @@ impl Analyzer {
                 }
                 let sentence_idx =
                     sentence_index_for_offset(sentences, mat.start()).unwrap_or(usize::MAX);
-                if sentence_idx != usize::MAX && sentence_has_citation(&sentences[sentence_idx].0) {
+                if sentence_idx != usize::MAX && CITATION_RE.is_match(&sentences[sentence_idx].0) {
                     continue;
                 }
                 let location = byte_to_location(text, mat.start());
@@ -1620,7 +1625,7 @@ impl Analyzer {
             }
             for (sentence_idx, group) in grouped {
                 let has_specifics = if sentence_idx != usize::MAX {
-                    sentence_has_specifics(&sentences[sentence_idx].0)
+                    SPECIFICITY_RE.is_match(&sentences[sentence_idx].0)
                 } else {
                     false
                 };
@@ -1693,7 +1698,7 @@ impl Analyzer {
             }
             for (sentence_idx, group) in grouped {
                 let has_specifics = if sentence_idx != usize::MAX {
-                    sentence_has_specifics(&sentences[sentence_idx].0)
+                    SPECIFICITY_RE.is_match(&sentences[sentence_idx].0)
                 } else {
                     false
                 };
@@ -2259,7 +2264,7 @@ impl Analyzer {
             if lower.starts_with('#') {
                 continue;
             }
-            if sentence_has_specifics(sentence) {
+            if SPECIFICITY_RE.is_match(sentence) {
                 continue;
             }
             if let Some(term) = profile
@@ -2344,7 +2349,7 @@ impl Analyzer {
                 }
                 let sentence_idx =
                     sentence_index_for_offset(sentences, start).unwrap_or(usize::MAX);
-                if sentence_idx != usize::MAX && sentence_has_citation(&sentences[sentence_idx].0) {
+                if sentence_idx != usize::MAX && CITATION_RE.is_match(&sentences[sentence_idx].0) {
                     continue;
                 }
                 let snippet = slice_snippet(text, start, mat.end());
@@ -2376,11 +2381,11 @@ impl Analyzer {
                 }
                 let sentence_idx =
                     sentence_index_for_offset(sentences, start).unwrap_or(usize::MAX);
-                if sentence_idx != usize::MAX && sentence_has_citation(&sentences[sentence_idx].0) {
+                if sentence_idx != usize::MAX && CITATION_RE.is_match(&sentences[sentence_idx].0) {
                     continue;
                 }
                 if sentence_idx != usize::MAX
-                    && percent_claim_is_contextual(&sentences[sentence_idx].0)
+                    && PERCENT_CONTEXT_OK_RE.is_match(&sentences[sentence_idx].0)
                 {
                     continue;
                 }
@@ -2583,7 +2588,7 @@ impl Analyzer {
                 continue;
             };
             if let Some(first) = content.trim_start().chars().next() {
-                if is_emoji_hint(first) {
+                if EMOJI_HINTS.contains(&first) {
                     let location = byte_to_location(text, offset);
                     if filtered.is_line_ignored(location.line) {
                         continue;
@@ -2967,7 +2972,7 @@ impl Analyzer {
                 *counts.entry(Category::Structure).or_default() += 1;
             }
 
-            if content.chars().any(is_emoji_hint)
+            if content.chars().any(|ch| EMOJI_HINTS.contains(&ch))
                 && !filtered.is_category_disabled(offset, Category::Formatting)
                 && !filtered.is_line_ignored(idx + 1)
             {
@@ -3796,10 +3801,6 @@ const EMOJI_HINTS: [char; 28] = [
 
 const ALLOWED_SUFFIXES: [&str; 6] = ["s", "es", "ed", "ing", "ly", "d"];
 
-fn is_emoji_hint(ch: char) -> bool {
-    EMOJI_HINTS.contains(&ch)
-}
-
 fn is_word_char(ch: char) -> bool {
     ch.is_alphanumeric() || matches!(ch, '_' | '-' | '\'')
 }
@@ -4014,18 +4015,6 @@ fn sentence_index_for_offset(sentences: &[(String, usize)], offset: usize) -> Op
         }
     }
     None
-}
-
-fn sentence_has_specifics(sentence: &str) -> bool {
-    SPECIFICITY_RE.is_match(sentence)
-}
-
-fn sentence_has_citation(sentence: &str) -> bool {
-    CITATION_RE.is_match(sentence)
-}
-
-fn percent_claim_is_contextual(sentence: &str) -> bool {
-    PERCENT_CONTEXT_OK_RE.is_match(sentence)
 }
 
 fn normalize_sentence(sentence: &str) -> String {

@@ -2,6 +2,10 @@
   "flow_check": {
     "files": [
       {
+        "path": "/home/layth888/Desktop/toneguard/flows/flow-blueprint.md",
+        "issues": []
+      },
+      {
         "path": "/home/layth888/Desktop/toneguard/flows/cli-calibrate.md",
         "issues": []
       },
@@ -31,96 +35,11 @@
   },
   "audit": {
     "summary": {
-      "files_scanned": 8,
-      "findings": 4,
-      "by_category": {
-        "passthrough": 4
-      },
-      "by_language": {
-        "rust": 4
-      }
+      "files_scanned": 31,
+      "findings": 0,
+      "by_category": {},
+      "by_language": {}
     },
-    "findings": [
-      {
-        "category": "pass-through",
-        "severity": "info",
-        "confidence": "high",
-        "message": "Pass-through wrapper chain length 2: sentence_has_citation -> is_match",
-        "path": "core/src/lib.rs",
-        "line": 4015,
-        "symbol": "sentence_has_citation",
-        "language": "rust",
-        "evidence": [
-          "Forward-only functions: sentence_has_citation -> is_match"
-        ],
-        "fix_instructions": {
-          "action": "inline",
-          "description": "Inline `sentence_has_citation` by replacing calls with direct calls to `is_match`",
-          "find_pattern": "sentence_has_citation\\\\s*\\\\(",
-          "replace_pattern": "is_match(",
-          "alternative": "Add justification to flow spec with reason: isolation"
-        }
-      },
-      {
-        "category": "pass-through",
-        "severity": "info",
-        "confidence": "high",
-        "message": "Pass-through wrapper chain length 2: sentence_has_specifics -> is_match",
-        "path": "core/src/lib.rs",
-        "line": 4011,
-        "symbol": "sentence_has_specifics",
-        "language": "rust",
-        "evidence": [
-          "Forward-only functions: sentence_has_specifics -> is_match"
-        ],
-        "fix_instructions": {
-          "action": "inline",
-          "description": "Inline `sentence_has_specifics` by replacing calls with direct calls to `is_match`",
-          "find_pattern": "sentence_has_specifics\\\\s*\\\\(",
-          "replace_pattern": "is_match(",
-          "alternative": "Add justification to flow spec with reason: isolation"
-        }
-      },
-      {
-        "category": "pass-through",
-        "severity": "info",
-        "confidence": "high",
-        "message": "Pass-through wrapper chain length 2: is_emoji_hint -> contains",
-        "path": "core/src/lib.rs",
-        "line": 3791,
-        "symbol": "is_emoji_hint",
-        "language": "rust",
-        "evidence": [
-          "Forward-only functions: is_emoji_hint -> contains"
-        ],
-        "fix_instructions": {
-          "action": "inline",
-          "description": "Inline `is_emoji_hint` by replacing calls with direct calls to `contains`",
-          "find_pattern": "is_emoji_hint\\\\s*\\\\(",
-          "replace_pattern": "contains(",
-          "alternative": "Add justification to flow spec with reason: isolation"
-        }
-      },
-      {
-        "category": "pass-through",
-        "severity": "info",
-        "confidence": "high",
-        "message": "Pass-through wrapper chain length 2: percent_claim_is_contextual -> is_match",
-        "path": "core/src/lib.rs",
-        "line": 4019,
-        "symbol": "percent_claim_is_contextual",
-        "language": "rust",
-        "evidence": [
-          "Forward-only functions: percent_claim_is_contextual -> is_match"
-        ],
-        "fix_instructions": {
-          "action": "inline",
-          "description": "Inline `percent_claim_is_contextual` by replacing calls with direct calls to `is_match`",
-          "find_pattern": "percent_claim_is_contextual\\\\s*\\\\(",
-          "replace_pattern": "is_match(",
-          "alternative": "Add justification to flow spec with reason: isolation"
-        }
-      }
-    ]
+    "findings": []
   }
 }

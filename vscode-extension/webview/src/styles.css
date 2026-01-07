@@ -1,0 +1,128 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* VS Code theme - follows editor colors */
+:root {
+    --tg-bg: var(--vscode-sideBar-background);
+    --tg-surface: var(--vscode-editorWidget-background);
+    --tg-surface-2: var(--vscode-editor-background);
+    --tg-text: var(--vscode-foreground);
+    --tg-muted: var(--vscode-descriptionForeground);
+    --tg-border: var(--vscode-widget-border);
+    --tg-accent: var(--vscode-textLink-foreground, #3794ff);
+    --tg-accent-2: var(--vscode-charts-green, #4caf50);
+    --tg-warn: var(--vscode-charts-orange, #ff9800);
+    --tg-danger: var(--vscode-editorError-foreground, #f44336);
+}
+
+/* Maple Light theme - refined solarized-inspired palette */
+:root[data-theme='maple-light'] {
+    /* Cleaner cream base instead of muddy brown */
+    --tg-bg: #faf8f5;
+    --tg-surface: #ffffff;
+    --tg-surface-2: #f5f3f0;
+    
+    /* Sharper text colors */
+    --tg-text: #1a1a1a;
+    --tg-muted: #666666;
+    
+    /* Subtle borders */
+    --tg-border: rgba(0, 0, 0, 0.08);
+    
+    /* Deeper teal accent */
+    --tg-accent: #0d7377;
+    
+    /* Warm maple orange for secondary accent */
+    --tg-accent-2: #c45d35;
+    
+    /* Complementary colors */
+    --tg-warn: #b5651d;
+    --tg-danger: #c53030;
+}
+
+/* Base reset */
+html, body {
+    height: 100%;
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    font-family: var(--vscode-font-family), -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 11px;
+    line-height: 1.35;
+    background: var(--tg-bg);
+    color: var(--tg-text);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+/* Compact scrollbars */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--tg-border);
+    border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--tg-muted);
+}
+
+/* Focus styles */
+:focus-visible {
+    outline: 1px solid var(--tg-accent);
+    outline-offset: 1px;
+}
+
+/* Form elements */
+input[type="text"],
+input[type="number"],
+input[type="search"],
+select,
+textarea {
+    font-family: inherit;
+    font-size: 11px;
+}
+
+input[type="checkbox"] {
+    width: 12px;
+    height: 12px;
+    margin: 0;
+    accent-color: var(--tg-accent);
+}
+
+/* Button reset */
+button {
+    font-family: inherit;
+    cursor: pointer;
+    border: none;
+    background: none;
+    padding: 0;
+    margin: 0;
+}
+
+button:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+/* Utility classes for compact sizing */
+@layer utilities {
+    .text-2xs {
+        font-size: 9px;
+        line-height: 1.2;
+    }
+}

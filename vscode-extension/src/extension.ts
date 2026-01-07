@@ -1,4 +1,4 @@
-import { execFile } from 'child_process';
+import { execFile, ExecFileException } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -34,12 +34,6 @@ type BinaryStatus = {
     installCommand: string;
 };
 
-type SidebarNode =
-    | { kind: 'info'; label: string; description?: string }
-    | { kind: 'action'; label: string; command: vscode.Command; description?: string }
-    | { kind: 'category'; category: string; count: number }
-    | { kind: 'finding'; finding: any };
-
 type DashboardState = {
     platform: string;
     configPath: string;
@@ -50,9 +44,40 @@ type DashboardState = {
     binaryInstallCommand: string;
     flowsCount: number | null;
     lastAudit: { when: string; findings: number } | null;
+    lastMarkdown: { when: string; findings: number } | null;
+    lastBlueprint: { when: string; nodes: number; edges: number } | null;
     lastProposal: { when: string } | null;
+    markdownSummary: {
+        files: number;
+        diagnostics: number;
+        repoIssuesCount: number;
+        repoIssues: { category: string; message: string; path: string }[];
+        topFiles: { path: string; count: number; line?: number }[];
+    } | null;
+    markdownFindings: {
+        path: string;
+        line?: number;
+        category: string;
+        message: string;
+        severity: string;
+    }[];
+    repoFindings: { path: string; category: string; message: string }[];
+    blueprintSummary: { nodes: number; edges: number; edgesResolved: number; errors: number } | null;
+    flowSummary: {
+        findings: number;
+        byCategory: { category: string; count: number }[];
+        topFindings: { path: string; line?: number; message: string; category?: string }[];
+    } | null;
+    flowFindings: {
+        path: string;
+        line?: number;
+        category: string;
+        message: string;
+        severity: string;
+    }[];
     detectedEnvs: DetectedEnvironments;
     defaultAIEditor: DefaultAIEditor;
+    uiTheme: string;
     skills: {
         writing: { cursor: boolean; claude: boolean; codex: boolean };
         'logic-flow': { cursor: boolean; claude: boolean; codex: boolean };
@@ -150,170 +175,6 @@ function isPathInside(baseDir: string, targetPath: string): boolean {
     return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
-class ToneGuardSidebarProvider implements vscode.TreeDataProvider<SidebarNode> {
-    private readonly onDidChangeEmitter = new vscode.EventEmitter<
-        SidebarNode | undefined
-    >();
-    readonly onDidChangeTreeData = this.onDidChangeEmitter.event;
-
-    refresh(): void {
-        this.onDidChangeEmitter.fire(undefined);
-    }
-
-    getTreeItem(element: SidebarNode): vscode.TreeItem {
-        if (element.kind === 'info') {
-            const item = new vscode.TreeItem(
-                element.label,
-                vscode.TreeItemCollapsibleState.None
-            );
-            item.description = element.description;
-            item.contextValue = 'toneguard.info';
-            return item;
-        }
-
-        if (element.kind === 'action') {
-            const item = new vscode.TreeItem(
-                element.label,
-                vscode.TreeItemCollapsibleState.None
-            );
-            item.command = element.command;
-            item.description = element.description;
-            item.contextValue = 'toneguard.action';
-            return item;
-        }
-
-        if (element.kind === 'category') {
-            const item = new vscode.TreeItem(
-                `${element.category} (${element.count})`,
-                element.count > 0
-                    ? vscode.TreeItemCollapsibleState.Collapsed
-                    : vscode.TreeItemCollapsibleState.None
-            );
-            item.contextValue = 'toneguard.category';
-            return item;
-        }
-
-        // Finding node
-        const finding = element.finding as any;
-        const filePath = typeof finding?.path === 'string' ? finding.path : '<unknown>';
-        const line = typeof finding?.line === 'number' ? finding.line : undefined;
-        const message =
-            typeof finding?.message === 'string' ? finding.message : 'Finding';
-        const severity =
-            typeof finding?.severity === 'string' ? finding.severity : 'info';
-
-        const loc = line ? `:${line}` : '';
-        const label = message.length > 80 ? `${message.slice(0, 77)}...` : message;
-
-        const item = new vscode.TreeItem(
-            label,
-            vscode.TreeItemCollapsibleState.None
-        );
-        item.description = `${normalizeReportedPath(filePath)}${loc}`;
-        item.tooltip = `[${severity}] ${message}\n\nClick to open file`;
-        item.command = {
-            command: 'dwg.openFindingLocation',
-            title: 'Open Finding',
-            arguments: [filePath, line],
-        };
-        item.contextValue = 'toneguard.finding';
-        return item;
-    }
-
-    async getChildren(element?: SidebarNode): Promise<SidebarNode[]> {
-        const root = getWorkspaceRoot();
-        if (!root) {
-            return [
-                {
-                    kind: 'info',
-                    label: 'Open a folder to enable ToneGuard',
-                    description: '',
-                },
-            ];
-        }
-
-        // Root level: show findings grouped by category
-        if (!element) {
-            const report = this.readAuditReport(root);
-            if (!report) {
-                return [
-                    {
-                        kind: 'action',
-                        label: 'Run ToneGuard to see findings',
-                        command: { command: 'dwg.runRecommended', title: 'Run' },
-                        description: 'Click to run audit',
-                    },
-                ];
-            }
-
-            const findings = Array.isArray(report?.audit?.findings)
-                ? report.audit.findings
-                : [];
-            const counts = new Map<string, number>();
-            for (const finding of findings) {
-                const category =
-                    typeof finding?.category === 'string'
-                        ? finding.category
-                        : 'unknown';
-                counts.set(category, (counts.get(category) ?? 0) + 1);
-            }
-
-            const categories = Array.from(counts.entries()).sort((a, b) => {
-                if (b[1] !== a[1]) {
-                    return b[1] - a[1];
-                }
-                return a[0].localeCompare(b[0]);
-            });
-
-            if (categories.length === 0) {
-                return [
-                    {
-                        kind: 'info',
-                        label: 'No findings - code is clean!',
-                        description: '',
-                    },
-                ];
-            }
-
-            return categories.map(([category, count]) => ({
-                kind: 'category',
-                category,
-                count,
-            }));
-        }
-
-        // Category level: show individual findings
-        if (element.kind === 'category') {
-            const report = this.readAuditReport(root);
-            const findings = Array.isArray(report?.audit?.findings)
-                ? report.audit.findings
-                : [];
-            const categoryFindings = findings.filter(
-                (f: any) => typeof f?.category === 'string' && f.category === element.category
-            );
-            return categoryFindings.map((finding: any) => ({
-                kind: 'finding',
-                finding,
-            }));
-        }
-
-        return [];
-    }
-
-    private readAuditReport(workspaceRoot: string): any | undefined {
-        try {
-            const reportPath = path.join(workspaceRoot, 'reports', 'flow-audit.json');
-            if (!fs.existsSync(reportPath)) {
-                return undefined;
-            }
-            const text = fs.readFileSync(reportPath, 'utf8');
-            return JSON.parse(text);
-        } catch {
-            return undefined;
-        }
-    }
-}
-
 class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
     private view?: vscode.WebviewView;
 
@@ -357,6 +218,303 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
         }
 
         switch (message.type) {
+            case 'copyReviewBundle': {
+                const root = getWorkspaceRoot();
+                if (!root) {
+                    void vscode.window.showErrorMessage('ToneGuard: No workspace open.');
+                    return;
+                }
+
+                const runtime = this.getRuntimeConfig();
+                const configShown = runtime.configPath || '<unset>';
+                const profile = runtime.profile || '';
+
+                const reportPaths = {
+                    markdown: path.join(root, 'reports', 'markdown-lint.json'),
+                    flow: path.join(root, 'reports', 'flow-audit.json'),
+                    proposal: path.join(root, 'reports', 'flow-proposal.md'),
+                    organize: path.join(root, 'reports', 'organization-report.json'),
+                    flowIndex: path.join(root, 'reports', 'flow-index.json'),
+                    blueprint: path.join(root, 'reports', 'flow-blueprint.json'),
+                };
+
+                const safeReadJson = (filePath: string): any | null => {
+                    try {
+                        if (!fs.existsSync(filePath)) {
+                            return null;
+                        }
+                        return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+                    } catch {
+                        return null;
+                    }
+                };
+
+                const markdown = safeReadJson(reportPaths.markdown);
+                const flow = safeReadJson(reportPaths.flow);
+                const organize = safeReadJson(reportPaths.organize);
+                const flowIndex = safeReadJson(reportPaths.flowIndex);
+                const blueprint = safeReadJson(reportPaths.blueprint);
+
+                const markdownRepoIssues = Array.isArray(markdown?.repo_issues)
+                    ? markdown.repo_issues
+                    : [];
+                const markdownRepoIssuesCount = markdownRepoIssues.length;
+                const markdownTop: any[] = Array.isArray(markdown?.files)
+                    ? markdown.files
+                          .map((file: any) => ({
+                              path: normalizeReportedPath(String(file?.path ?? '')),
+                              diagnostics: Array.isArray(file?.diagnostics) ? file.diagnostics : [],
+                          }))
+                          .map((file: any) => ({
+                              path: file.path,
+                              count: file.diagnostics.length,
+                              firstLine:
+                                  file.diagnostics.length > 0 &&
+                                  typeof file.diagnostics[0]?.location?.line === 'number'
+                                      ? file.diagnostics[0].location.line
+                                      : undefined,
+                              sample: file.diagnostics.slice(0, 3).map((d: any) => ({
+                                  line:
+                                      typeof d?.location?.line === 'number'
+                                          ? d.location.line
+                                          : undefined,
+                                  category:
+                                      typeof d?.category === 'string' ? d.category : undefined,
+                                  message:
+                                      typeof d?.message === 'string' ? d.message : undefined,
+                              })),
+                          }))
+                          .filter((file: any) => file.path && file.count > 0)
+                          .sort((a: any, b: any) => b.count - a.count)
+                          .slice(0, 5)
+                    : [];
+                const markdownRepoTop = markdownRepoIssues
+                    .slice(0, 8)
+                    .map((issue: any) => ({
+                        category: String(issue?.category ?? ''),
+                        message: String(issue?.message ?? ''),
+                        path: normalizeReportedPath(String(issue?.path ?? '')),
+                    }))
+                    .filter((issue: any) => issue.path && issue.message);
+
+                const flowFindings: any[] = Array.isArray(flow?.audit?.findings)
+                    ? flow.audit.findings.slice(0, 8).map((f: any) => ({
+                          path: normalizeReportedPath(String(f?.path ?? '')),
+                          line: typeof f?.line === 'number' ? f.line : undefined,
+                          category: typeof f?.category === 'string' ? f.category : undefined,
+                          message: typeof f?.message === 'string' ? f.message : undefined,
+                      }))
+                    : [];
+
+                const organizeSummary =
+                    organize && typeof organize === 'object'
+                        ? {
+                              repo_type: organize?.repo_type?.kind ?? undefined,
+                              confidence: organize?.repo_type?.confidence ?? undefined,
+                              findings: Array.isArray(organize?.findings)
+                                  ? organize.findings.length
+                                  : undefined,
+                          }
+                        : null;
+
+                const flowIndexSummary =
+                    flowIndex && typeof flowIndex === 'object'
+                        ? {
+                              files_scanned:
+                                  typeof flowIndex?.files_scanned === 'number'
+                                      ? flowIndex.files_scanned
+                                      : undefined,
+                              functions:
+                                  typeof flowIndex?.functions === 'number'
+                                      ? flowIndex.functions
+                                      : undefined,
+                              by_language:
+                                  flowIndex?.by_language && typeof flowIndex.by_language === 'object'
+                                      ? flowIndex.by_language
+                                      : undefined,
+                              sample: Array.isArray(flowIndex?.items)
+                                  ? flowIndex.items.slice(0, 40).map((item: any) => ({
+                                        name: String(item?.display_name ?? ''),
+                                        file: normalizeReportedPath(String(item?.file_display ?? item?.file ?? '')),
+                                        line:
+                                            typeof item?.start_line === 'number'
+                                                ? item.start_line
+                                                : undefined,
+                                        kind: String(item?.kind ?? ''),
+                                        language: String(item?.language ?? ''),
+                                    }))
+                                  : undefined,
+                          }
+                        : null;
+
+                const blueprintSummary =
+                    blueprint && typeof blueprint === 'object'
+                        ? {
+                              nodes:
+                                  typeof blueprint?.stats?.nodes === 'number'
+                                      ? blueprint.stats.nodes
+                                      : Array.isArray(blueprint?.nodes)
+                                        ? blueprint.nodes.length
+                                        : undefined,
+                              edges:
+                                  typeof blueprint?.stats?.edges === 'number'
+                                      ? blueprint.stats.edges
+                                      : Array.isArray(blueprint?.edges)
+                                        ? blueprint.edges.length
+                                        : undefined,
+                              edges_resolved:
+                                  typeof blueprint?.stats?.edges_resolved === 'number'
+                                      ? blueprint.stats.edges_resolved
+                                      : undefined,
+                              errors: Array.isArray(blueprint?.errors)
+                                  ? blueprint.errors.length
+                                  : undefined,
+                              sample_edges: Array.isArray(blueprint?.edges)
+                                  ? blueprint.edges.slice(0, 30).map((e: any) => ({
+                                        from: String(e?.from ?? ''),
+                                        to: e?.to ? String(e.to) : null,
+                                        to_raw: String(e?.to_raw ?? ''),
+                                        kind: String(e?.kind ?? ''),
+                                        line: typeof e?.line === 'number' ? e.line : undefined,
+                                        resolved: Boolean(e?.resolved),
+                                    }))
+                                  : undefined,
+                          }
+                        : null;
+
+                const bundle = {
+                    kind: 'toneguard-review-bundle',
+                    generated_at: new Date().toISOString(),
+                    workspace: {
+                        root,
+                        config: configShown,
+                        profile: profile || 'auto',
+                    },
+                    reports: {
+                        markdown: fs.existsSync(reportPaths.markdown)
+                            ? 'reports/markdown-lint.json'
+                            : null,
+                        flow: fs.existsSync(reportPaths.flow) ? 'reports/flow-audit.json' : null,
+                        proposal: fs.existsSync(reportPaths.proposal)
+                            ? 'reports/flow-proposal.md'
+                            : null,
+                        organize: fs.existsSync(reportPaths.organize)
+                            ? 'reports/organization-report.json'
+                            : null,
+                        flow_index: fs.existsSync(reportPaths.flowIndex)
+                            ? 'reports/flow-index.json'
+                            : null,
+                        blueprint: fs.existsSync(reportPaths.blueprint)
+                            ? 'reports/flow-blueprint.json'
+                            : null,
+                    },
+                    markdown: {
+                        total: (() => {
+                            const fileDiagnostics =
+                                typeof markdown?.total_diagnostics === 'number'
+                                    ? markdown.total_diagnostics
+                                    : Array.isArray(markdown?.files)
+                                      ? markdown.files.reduce((sum: number, file: any) => {
+                                            const diags = Array.isArray(file?.diagnostics)
+                                                ? file.diagnostics.length
+                                                : 0;
+                                            return sum + diags;
+                                        }, 0)
+                                      : null;
+                            return typeof fileDiagnostics === 'number'
+                                ? fileDiagnostics + markdownRepoIssuesCount
+                                : null;
+                        })(),
+                        repo_issues_count: markdownRepoIssuesCount,
+                        repo_issues: markdownRepoTop,
+                        file_diagnostics:
+                            typeof markdown?.total_diagnostics === 'number'
+                                ? markdown.total_diagnostics
+                                : Array.isArray(markdown?.files)
+                                  ? markdown.files.reduce((sum: number, file: any) => {
+                                        const diags = Array.isArray(file?.diagnostics)
+                                            ? file.diagnostics.length
+                                            : 0;
+                                        return sum + diags;
+                                    }, 0)
+                                  : null,
+                        top_files: markdownTop,
+                    },
+                    flow: {
+                        findings:
+                            typeof flow?.audit?.summary?.findings === 'number'
+                                ? flow.audit.summary.findings
+                                : Array.isArray(flow?.audit?.findings)
+                                  ? flow.audit.findings.length
+                                  : null,
+                        top_findings: flowFindings,
+                    },
+                    flow_index: flowIndexSummary,
+                    blueprint: blueprintSummary,
+                    organize: organizeSummary,
+                    task: {
+                        goal: 'Review these findings and propose concrete patches.',
+                        constraints: [
+                            'Prefer small, local edits.',
+                            'Do not add new abstractions unless required.',
+                            'If moving files, keep build/runtime behavior unchanged.',
+                        ],
+                    },
+                };
+
+                const text = JSON.stringify(bundle, null, 2);
+                await vscode.env.clipboard.writeText(text);
+
+                const env = resolveAIEditor(detectAIEnvironments());
+                if (env === 'cursor') {
+                    try {
+                        await vscode.commands.executeCommand('cursor.composer.new');
+                        await new Promise((resolve) => setTimeout(resolve, 300));
+                        try {
+                            await vscode.commands.executeCommand(
+                                'editor.action.clipboardPasteAction'
+                            );
+                            void vscode.window.showInformationMessage(
+                                'ToneGuard: Review bundle pasted into Cursor Composer.'
+                            );
+                            return;
+                        } catch {
+                            void vscode.window.showInformationMessage(
+                                'ToneGuard: Review bundle copied. Paste in Cursor Composer.'
+                            );
+                            return;
+                        }
+                    } catch {
+                        void vscode.window.showInformationMessage(
+                            'ToneGuard: Review bundle copied. Open Cursor Composer and paste.'
+                        );
+                        return;
+                    }
+                }
+                if (env === 'claude') {
+                    const pasted = tryPasteToTerminal(text, ['claude', 'anthropic']);
+                    void vscode.window.showInformationMessage(
+                        pasted
+                            ? 'ToneGuard: Review bundle pasted into Claude terminal. Review and press Enter.'
+                            : 'ToneGuard: Review bundle copied. Paste in Claude Code.'
+                    );
+                    return;
+                }
+                if (env === 'codex') {
+                    const pasted = tryPasteToTerminal(text, ['codex', 'openai']);
+                    void vscode.window.showInformationMessage(
+                        pasted
+                            ? 'ToneGuard: Review bundle pasted into Codex terminal. Review and press Enter.'
+                            : 'ToneGuard: Review bundle copied. Paste in Codex.'
+                    );
+                    return;
+                }
+
+                void vscode.window.showInformationMessage(
+                    'ToneGuard: Review bundle copied to clipboard.'
+                );
+                return;
+            }
             case 'runRecommended':
                 void vscode.commands.executeCommand('dwg.runRecommended');
                 return;
@@ -365,6 +523,9 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                 return;
             case 'runProposal':
                 void vscode.commands.executeCommand('dwg.flowPropose');
+                return;
+            case 'runBlueprint':
+                void vscode.commands.executeCommand('dwg.flowBlueprint');
                 return;
             case 'runOrganize':
                 void this.runOrganize(message);
@@ -375,6 +536,9 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
             case 'orgFixClaude':
                 void this.runOrganizeFix('claude');
                 return;
+            case 'orgFixCodex':
+                void this.runOrganizeFix('codex');
+                return;
             case 'newFlow':
                 void vscode.commands.executeCommand('dwg.flowNew');
                 return;
@@ -384,8 +548,66 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
             case 'openConfig': {
                 const config = this.getRuntimeConfig();
                 await openConfigFile(this.context, config.configPath);
-        return;
-    }
+                return;
+            }
+            case 'openMarkdownReport': {
+                const root = getWorkspaceRoot();
+                if (!root) {
+                    return;
+                }
+                const reportPath = path.join(root, 'reports', 'markdown-lint.json');
+                if (!fs.existsSync(reportPath)) {
+                    void vscode.window.showErrorMessage(
+                        'ToneGuard: reports/markdown-lint.json not found. Run recommended review.'
+                    );
+                    return;
+                }
+                const doc = await vscode.workspace.openTextDocument(reportPath);
+                await vscode.window.showTextDocument(doc, { preview: false });
+                return;
+            }
+            case 'openBlueprintReport': {
+                const root = getWorkspaceRoot();
+                if (!root) {
+                    return;
+                }
+                const reportPath = path.join(root, 'reports', 'flow-blueprint.json');
+                if (!fs.existsSync(reportPath)) {
+                    void vscode.window.showErrorMessage(
+                        'ToneGuard: reports/flow-blueprint.json not found. Run recommended review.'
+                    );
+                    return;
+                }
+                const doc = await vscode.workspace.openTextDocument(reportPath);
+                await vscode.window.showTextDocument(doc, { preview: false });
+                return;
+            }
+            case 'openMarkdownFile': {
+                const filePath = typeof message.path === 'string' ? message.path : '';
+                const line = typeof message.line === 'number' ? message.line : undefined;
+                if (!filePath) {
+                    return;
+                }
+                void vscode.commands.executeCommand('dwg.openFindingLocation', filePath, line);
+                return;
+            }
+            case 'openFlowAudit': {
+                void vscode.commands.executeCommand('dwg.openFlowAuditReport');
+                return;
+            }
+            case 'openFlowFinding': {
+                const filePath = typeof message.path === 'string' ? message.path : '';
+                const line = typeof message.line === 'number' ? message.line : undefined;
+                if (!filePath) {
+                    return;
+                }
+                void vscode.commands.executeCommand('dwg.openFindingLocation', filePath, line);
+                return;
+            }
+            case 'openFlowMap': {
+                void vscode.commands.executeCommand('dwg.openFlowMap');
+                return;
+            }
             case 'addIgnore': {
                 const raw = typeof message.value === 'string' ? message.value : '';
                 const cleaned = raw.trim();
@@ -461,6 +683,17 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                 );
                 void vscode.window.showInformationMessage(
                     `ToneGuard: Default AI editor set to ${value}.`
+                );
+                await this.refresh();
+                return;
+            }
+            case 'setUiTheme': {
+                const value = typeof message.value === 'string' ? message.value : 'vscode';
+                const config = vscode.workspace.getConfiguration('dwg');
+                await config.update(
+                    'uiTheme',
+                    value,
+                    vscode.ConfigurationTarget.Global
                 );
                 await this.refresh();
                 return;
@@ -624,6 +857,8 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
         }
 
         let lastAudit: DashboardState['lastAudit'] = null;
+        let flowSummary: DashboardState['flowSummary'] = null;
+        let flowFindings: DashboardState['flowFindings'] = [];
         if (workspaceRoot) {
             const auditPath = path.join(workspaceRoot, 'reports', 'flow-audit.json');
             if (fs.existsSync(auditPath)) {
@@ -638,8 +873,188 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                         when: when ?? 'reports/flow-audit.json',
                         findings: findings.length,
                     };
+                    flowFindings = findings.slice(0, 200).map((f: any) => ({
+                        path: normalizeReportedPath(String(f?.path ?? '')),
+                        line: typeof f?.line === 'number' ? f.line : undefined,
+                        category: typeof f?.category === 'string' ? f.category : 'unknown',
+                        message: String(f?.message ?? 'Finding'),
+                        severity: typeof f?.severity === 'string' ? f.severity : 'info',
+                    }));
+                    const byCategory = report?.audit?.summary?.by_category ?? {};
+                    const categoryEntries = Object.entries(byCategory)
+                        .filter(([, count]) => typeof count === 'number' && count > 0)
+                        .sort((a, b) => (b[1] as number) - (a[1] as number))
+                        .slice(0, 8)
+                        .map(([category, count]) => ({
+                            category,
+                            count: count as number,
+                        }));
+                    const topFindings = findings.slice(0, 8).map((f: any) => ({
+                        path: String(f?.path ?? ''),
+                        line: typeof f?.line === 'number' ? f.line : undefined,
+                        message: String(f?.message ?? 'Finding'),
+                        category: typeof f?.category === 'string' ? f.category : undefined,
+                    }));
+                    flowSummary = {
+                        findings: findings.length,
+                        byCategory: categoryEntries,
+                        topFindings,
+                    };
                 } catch {
                     lastAudit = null;
+                    flowSummary = null;
+                    flowFindings = [];
+                }
+            }
+        }
+
+        let lastMarkdown: DashboardState['lastMarkdown'] = null;
+        let markdownSummary: DashboardState['markdownSummary'] = null;
+        let markdownFindings: DashboardState['markdownFindings'] = [];
+        let repoFindings: DashboardState['repoFindings'] = [];
+        let lastBlueprint: DashboardState['lastBlueprint'] = null;
+        let blueprintSummary: DashboardState['blueprintSummary'] = null;
+        if (workspaceRoot) {
+            const markdownPath = path.join(workspaceRoot, 'reports', 'markdown-lint.json');
+            if (fs.existsSync(markdownPath)) {
+                try {
+                    const text = fs.readFileSync(markdownPath, 'utf8');
+                    const report = JSON.parse(text);
+                    let findings = 0;
+                    if (typeof report?.total_diagnostics === 'number') {
+                        findings = report.total_diagnostics;
+                    } else if (Array.isArray(report?.files)) {
+                        findings = report.files.reduce((sum: number, file: any) => {
+                            const diags = Array.isArray(file?.diagnostics)
+                                ? file.diagnostics.length
+                                : 0;
+                            return sum + diags;
+                        }, 0);
+                    }
+                    const repoIssues = Array.isArray(report?.repo_issues)
+                        ? report.repo_issues
+                        : [];
+                    repoFindings = repoIssues
+                        .slice(0, 200)
+                        .map((issue: any) => ({
+                            category: String(issue?.category ?? 'unknown'),
+                            message: String(issue?.message ?? 'Repo issue'),
+                            path: normalizeReportedPath(String(issue?.path ?? '<repo>')),
+                        }))
+                        .filter((issue: any) => issue.path && issue.message);
+                    const repoIssuesCount = repoIssues.length;
+                    const totalIssues = findings + repoIssuesCount;
+                    const when = fileMtimeLabel(markdownPath);
+                    lastMarkdown = {
+                        when: when ?? 'reports/markdown-lint.json',
+                        findings: totalIssues,
+                    };
+                    if (Array.isArray(report?.files)) {
+                        // Flatten markdown diagnostics for the Findings tab (bounded).
+                        const out: DashboardState['markdownFindings'] = [];
+                        for (const file of report.files) {
+                            if (out.length >= 200) {
+                                break;
+                            }
+                            const filePath = normalizeReportedPath(String(file?.path ?? ''));
+                            const diags = Array.isArray(file?.diagnostics) ? file.diagnostics : [];
+                            for (const diag of diags) {
+                                if (out.length >= 200) {
+                                    break;
+                                }
+                                const line =
+                                    typeof diag?.location?.line === 'number'
+                                        ? diag.location.line
+                                        : typeof diag?.line === 'number'
+                                          ? diag.line
+                                          : undefined;
+                                out.push({
+                                    path: filePath,
+                                    line,
+                                    category: String(diag?.category ?? 'unknown'),
+                                    message: String(diag?.message ?? 'Issue'),
+                                    severity: typeof diag?.severity === 'string' ? diag.severity : 'warning',
+                                });
+                            }
+                        }
+                        markdownFindings = out;
+
+                        const topFiles = report.files
+                            .map((file: any) => {
+                                const diags = Array.isArray(file?.diagnostics)
+                                    ? file.diagnostics
+                                    : [];
+                                const firstLine =
+                                    diags.length > 0 &&
+                                    typeof diags[0]?.location?.line === 'number'
+                                        ? diags[0].location.line
+                                        : diags.length > 0 && typeof diags[0]?.line === 'number'
+                                          ? diags[0].line
+                                          : undefined;
+                                return {
+                                    path: normalizeReportedPath(String(file?.path ?? '')),
+                                    count: diags.length,
+                                    line: firstLine,
+                                };
+                            })
+                            .filter((file: any) => file.path && file.count > 0)
+                            .sort((a: any, b: any) => b.count - a.count)
+                            .slice(0, 8);
+                        const topRepoIssues = repoIssues
+                            .slice(0, 8)
+                            .map((issue: any) => ({
+                                category: String(issue?.category ?? ''),
+                                message: String(issue?.message ?? ''),
+                                path: normalizeReportedPath(String(issue?.path ?? '')),
+                            }))
+                            .filter((issue: any) => issue.path && issue.message);
+                        markdownSummary = {
+                            files: report.files.length,
+                            diagnostics: findings,
+                            repoIssuesCount,
+                            repoIssues: topRepoIssues,
+                            topFiles,
+                        };
+                    }
+                } catch {
+                    lastMarkdown = null;
+                    markdownSummary = null;
+                    markdownFindings = [];
+                    repoFindings = [];
+                }
+            }
+        }
+
+        if (workspaceRoot) {
+            const blueprintPath = path.join(workspaceRoot, 'reports', 'flow-blueprint.json');
+            if (fs.existsSync(blueprintPath)) {
+                try {
+                    const text = fs.readFileSync(blueprintPath, 'utf8');
+                    const report = JSON.parse(text);
+                    const nodes = Array.isArray(report?.nodes) ? report.nodes.length : 0;
+                    const edges = Array.isArray(report?.edges) ? report.edges.length : 0;
+                    const edgesResolved =
+                        typeof report?.stats?.edges_resolved === 'number'
+                            ? report.stats.edges_resolved
+                            : Array.isArray(report?.edges)
+                              ? report.edges.filter((e: any) => Boolean(e?.resolved)).length
+                              : 0;
+                    const errors = Array.isArray(report?.errors) ? report.errors.length : 0;
+                    const when = fileMtimeLabel(blueprintPath);
+                    lastBlueprint = {
+                        when: when ?? 'reports/flow-blueprint.json',
+                        nodes,
+                        edges,
+                    };
+                    blueprintSummary = {
+                        nodes,
+                        edges,
+                        edgesResolved,
+                        errors,
+                    };
+                } catch {
+                    lastBlueprint = null;
+                    blueprintSummary = null;
                 }
             }
         }
@@ -664,6 +1079,7 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
         const strict = config.get<boolean>('strict', false);
         const noRepoChecks = config.get<boolean>('noRepoChecks', false);
         const defaultAIEditor = config.get<DefaultAIEditor>('defaultAIEditor', 'auto');
+        const uiTheme = config.get<string>('uiTheme', 'vscode');
 
         const configEditable =
             configExists && workspaceRoot && absConfigPath
@@ -703,9 +1119,18 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
             binaryInstallCommand: binaryStatus.installCommand,
             flowsCount,
             lastAudit,
+            lastMarkdown,
+            lastBlueprint,
             lastProposal,
+            markdownSummary,
+            markdownFindings,
+            repoFindings,
+            blueprintSummary,
+            flowSummary,
+            flowFindings,
             detectedEnvs,
             defaultAIEditor,
+            uiTheme,
             skills: {
                 writing: {
                     cursor: isSkillInstalled('cursor', 'writing'),
@@ -756,6 +1181,8 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
 
         const args = [
             'organize',
+            '--config',
+            config.configPath,
             '--json',
             '--data-min-kb',
             String(dataMinKb),
@@ -770,9 +1197,9 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
         this.outputChannel.show(true);
         this.outputChannel.appendLine(`ToneGuard: ${cliCommand} ${args.join(' ')}`);
 
-        try {
-            await new Promise<void>((resolve, reject) => {
-                execFile(cliCommand, args, { cwd: workspaceRoot }, (error, stdout, stderr) => {
+        const runArgs = (run: string[]): Promise<{ stdout: string; stderr: string }> => {
+            return new Promise((resolve, reject) => {
+                execFile(cliCommand, run, { cwd: workspaceRoot }, (error, stdout, stderr) => {
                     if (stdout) {
                         this.outputChannel.appendLine(stdout);
                     }
@@ -780,12 +1207,17 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                         this.outputChannel.appendLine(stderr);
                     }
                     if (error) {
-                        reject(error);
+                        const err = error as NodeJS.ErrnoException;
+                        reject({ err, stdout, stderr, run });
                         return;
                     }
-                    resolve();
+                    resolve({ stdout, stderr });
                 });
             });
+        };
+
+        try {
+            await runArgs(args);
 
             // Parse and display results
             if (fs.existsSync(outFile)) {
@@ -815,9 +1247,71 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                 );
             }
         } catch (error) {
-            const err = error as NodeJS.ErrnoException;
-            this.outputChannel.appendLine(`ToneGuard: Organization analysis failed: ${err.message}`);
-            void vscode.window.showErrorMessage('ToneGuard: Organization analysis failed. See output.');
+            const failure = error as {
+                err?: NodeJS.ErrnoException;
+                stderr?: string;
+                run?: string[];
+            };
+            const stderr = failure?.stderr ?? '';
+            const isBaseUsage =
+                /Usage:\s+dwg\s+--config/i.test(stderr) &&
+                !/Usage:\s+dwg\s+organize/i.test(stderr);
+            if (isBaseUsage) {
+                this.outputChannel.appendLine(
+                    'ToneGuard: This dwg binary does not support `dwg organize`. Update the extension binaries.'
+                );
+                void vscode.window.showErrorMessage(
+                    'ToneGuard: Organize is not available in this CLI. Update the extension binaries.'
+                );
+                return;
+            }
+            if (stderr.includes('--data-min-kb')) {
+                const fallbackArgs = args.filter(
+                    (arg) => arg !== '--data-min-kb' && arg !== String(dataMinKb)
+                );
+                this.outputChannel.appendLine(
+                    'ToneGuard: Retrying organize without --data-min-kb (older CLI detected).'
+                );
+                try {
+                    await runArgs(fallbackArgs);
+                    if (fs.existsSync(outFile)) {
+                        const report = JSON.parse(fs.readFileSync(outFile, 'utf-8'));
+                        const findings = report.findings || [];
+                        const repoType = report.repo_type || {};
+                        if (this.view) {
+                            this.view.webview.postMessage({
+                                type: 'organizeResult',
+                                repoType: repoType.kind || 'Mixed',
+                                confidence: ((repoType.confidence || 0) * 100).toFixed(0) + '%',
+                                issueCount: findings.length,
+                                findings: findings.slice(0, 20).map((f: any) => ({
+                                    path: f.path,
+                                    issue: f.issue,
+                                    action: f.suggested_action,
+                                    reason: f.reason,
+                                    target: f.target_path,
+                                })),
+                            });
+                        }
+                        void vscode.window.showInformationMessage(
+                            `ToneGuard: Found ${findings.length} organization issue(s).`
+                        );
+                        return;
+                    }
+                } catch (retryError) {
+                    const retryErr = retryError as { err?: NodeJS.ErrnoException };
+                    this.outputChannel.appendLine(
+                        `ToneGuard: Organization analysis failed after retry: ${retryErr?.err?.message ?? 'unknown error'}`
+                    );
+                }
+            }
+            const err = failure?.err;
+            this.outputChannel.appendLine(
+                `ToneGuard: Organization analysis failed: ${err?.message ?? 'unknown error'}`
+            );
+            void vscode.window.showErrorMessage(
+                'ToneGuard: Organization analysis failed. See output.'
+            );
         }
     }
 
@@ -835,7 +1329,7 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
             return;
         }
 
-        const args = ['organize', '--prompt-for', agent, workspaceRoot];
+        const args = ['organize', '--config', config.configPath, '--prompt-for', agent, workspaceRoot];
 
         try {
             const { stdout } = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
@@ -870,10 +1364,28 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                         'ToneGuard: Organization fix instructions copied. Open Composer (Cmd+I) and paste.'
                     );
                 }
+            } else if (agent === 'claude') {
+                const pasted = tryPasteToTerminal(stdout, ['claude', 'anthropic']);
+                if (pasted) {
+                    void vscode.window.showInformationMessage(
+                        'ToneGuard: Organization fix instructions pasted into Claude terminal. Review and press Enter.'
+                    );
+                } else {
+                    void vscode.window.showInformationMessage(
+                        'ToneGuard: Organization fix instructions copied. Paste in Claude Code to apply.'
+                    );
+                }
             } else {
-                void vscode.window.showInformationMessage(
-                    `ToneGuard: Organization fix instructions copied. Paste in ${agent === 'claude' ? 'Claude Code' : 'Codex'}.`
-                );
+                const pasted = tryPasteToTerminal(stdout, ['codex', 'openai']);
+                if (pasted) {
+                    void vscode.window.showInformationMessage(
+                        'ToneGuard: Organization fix instructions pasted into Codex terminal. Review and press Enter.'
+                    );
+                } else {
+                    void vscode.window.showInformationMessage(
+                        'ToneGuard: Organization fix instructions copied. Paste in Codex to apply.'
+                    );
+                }
             }
         } catch (error) {
             const err = error as NodeJS.ErrnoException;
@@ -888,6 +1400,35 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
     ): string {
         const nonce = getNonce();
         const stateJson = JSON.stringify(state).replace(/</g, '\\u003c');
+
+        const stylePath = vscode.Uri.joinPath(
+            this.context.extensionUri,
+            'media',
+            'style.css'
+        );
+        const scriptPath = vscode.Uri.joinPath(
+            this.context.extensionUri,
+            'media',
+            'dashboard.js'
+        );
+        if (fs.existsSync(stylePath.fsPath) && fs.existsSync(scriptPath.fsPath)) {
+            const styleUri = webview.asWebviewUri(stylePath);
+            const scriptUri = webview.asWebviewUri(scriptPath);
+            return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} https:; style-src ${webview.cspSource}; font-src ${webview.cspSource}; script-src ${webview.cspSource} 'nonce-${nonce}';">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="${styleUri}">
+</head>
+<body>
+    <div id="app"></div>
+    <script nonce="${nonce}">window.__TONEGUARD_INITIAL_STATE__ = ${stateJson};</script>
+    <script nonce="${nonce}" src="${scriptUri}"></script>
+</body>
+</html>`;
+        }
 
         return `<!DOCTYPE html>
 <html lang="en">
@@ -905,6 +1446,14 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
             --tg-accent: var(--vscode-charts-blue);
             --tg-accent-2: var(--vscode-charts-green);
             --tg-warn: var(--vscode-charts-orange);
+            --tg-shadow: rgba(0, 0, 0, 0.12);
+            --tg-radius: 12px;
+        }
+
+        :root[data-theme="maple"] {
+            --tg-accent: #c25d35;
+            --tg-accent-2: #3d5a47;
+            --tg-warn: #c25d35;
         }
 
         body {
@@ -913,12 +1462,13 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
             font-family: var(--vscode-font-family);
             color: var(--tg-text);
             background: var(--tg-bg);
+            line-height: 1.4;
         }
 
         .container {
-            padding: 14px;
+            padding: 12px;
             display: grid;
-            gap: 14px;
+            gap: 12px;
         }
 
         .section-title {
@@ -926,16 +1476,17 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
             letter-spacing: 0.12em;
             text-transform: uppercase;
             color: var(--tg-muted);
-            margin: 0 0 8px;
+            margin: 6px 0 8px;
         }
 
         .card {
             background: linear-gradient(135deg, rgba(255,255,255,0.02), rgba(0,0,0,0.05)), var(--tg-card);
             border: 1px solid var(--tg-border);
-            border-radius: 12px;
+            border-radius: var(--tg-radius);
             padding: 12px;
             display: grid;
             gap: 8px;
+            box-shadow: 0 1px 2px var(--tg-shadow);
         }
 
         .card-row {
@@ -952,6 +1503,7 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
 
         .value {
             font-size: 12px;
+            font-variant-numeric: tabular-nums;
         }
 
         .badge {
@@ -960,6 +1512,8 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
             font-size: 11px;
             background: rgba(255,255,255,0.05);
             border: 1px solid var(--tg-border);
+            font-weight: 600;
+            letter-spacing: 0.01em;
         }
 
         .badge.ok {
@@ -985,6 +1539,7 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
             border-radius: 8px;
             font-size: 12px;
             cursor: pointer;
+            transition: background 0.15s ease, border-color 0.15s ease, transform 0.05s ease;
         }
 
         button.secondary {
@@ -995,6 +1550,19 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
         button.ghost {
             background: transparent;
             color: var(--tg-text);
+        }
+
+        button:hover:not(:disabled) {
+            filter: brightness(1.05);
+        }
+
+        button:active:not(:disabled) {
+            transform: translateY(1px);
+        }
+
+        button:focus-visible {
+            outline: 2px solid var(--vscode-focusBorder);
+            outline-offset: 2px;
         }
 
         button:disabled {
@@ -1034,6 +1602,14 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
             border: 1px solid var(--tg-border);
             border-radius: 8px;
             padding: 6px 8px;
+            background: var(--vscode-input-background);
+            color: var(--vscode-input-foreground);
+        }
+
+        select {
+            border: 1px solid var(--tg-border);
+            border-radius: 8px;
+            padding: 4px 8px;
             background: var(--vscode-input-background);
             color: var(--vscode-input-foreground);
         }
@@ -1123,34 +1699,74 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
             font-style: italic;
         }
 
+        .list {
+            display: grid;
+            gap: 6px;
+        }
+
+        .list-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 6px 8px;
+            border-radius: 8px;
+            border: 1px solid var(--tg-border);
+            background: rgba(255, 255, 255, 0.03);
+            font-size: 11px;
+            cursor: pointer;
+        }
+
+        .list-item:hover {
+            border-color: var(--tg-accent);
+        }
+
+        .list-item .path {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            flex: 1;
+        }
+
+        .list-item .count {
+            font-variant-numeric: tabular-nums;
+            color: var(--tg-muted);
+        }
+
         /* Tab navigation */
         .tabs {
-            display: flex;
-            gap: 0;
-            border-bottom: 1px solid var(--tg-border);
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 4px;
+            padding: 4px;
+            border: 1px solid var(--tg-border);
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.04);
             margin-bottom: 12px;
-            overflow-x: auto;
         }
 
         .tab {
-            padding: 8px 14px;
+            padding: 8px 10px;
             font-size: 12px;
             background: transparent;
-            border: none;
-            border-bottom: 2px solid transparent;
+            border: 1px solid transparent;
+            border-radius: 999px;
             color: var(--tg-muted);
             cursor: pointer;
             white-space: nowrap;
-            transition: color 0.15s, border-color 0.15s;
+            transition: background 0.15s, color 0.15s, border-color 0.15s;
         }
 
         .tab:hover {
             color: var(--tg-text);
+            background: rgba(255, 255, 255, 0.04);
         }
 
         .tab.active {
-            color: var(--tg-accent);
-            border-bottom-color: var(--tg-accent);
+            color: var(--tg-text);
+            background: var(--tg-card);
+            border-color: var(--tg-border);
+            box-shadow: 0 1px 2px var(--tg-shadow);
         }
 
         .tab-content {
@@ -1159,6 +1775,41 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
 
         .tab-content.active {
             display: block;
+        }
+
+        details.accordion {
+            border: 1px solid var(--tg-border);
+            border-radius: var(--tg-radius);
+            background: linear-gradient(135deg, rgba(255,255,255,0.02), rgba(0,0,0,0.05)), var(--tg-card);
+            box-shadow: 0 1px 2px var(--tg-shadow);
+            overflow: hidden;
+        }
+
+        details.accordion > summary {
+            list-style: none;
+            cursor: pointer;
+            padding: 10px 12px;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--tg-text);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            user-select: none;
+        }
+
+        details.accordion > summary::-webkit-details-marker {
+            display: none;
+        }
+
+        details.accordion[open] > summary {
+            border-bottom: 1px solid var(--tg-border);
+        }
+
+        .accordion-body {
+            padding: 12px;
+            display: grid;
+            gap: 12px;
         }
 
         .alert {
@@ -1179,6 +1830,11 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
             border: 1px solid var(--tg-accent);
             color: var(--tg-accent);
         }
+
+        .alert a {
+            color: inherit;
+            text-decoration: underline;
+        }
     </style>
 </head>
 <body>
@@ -1190,19 +1846,18 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                 <button class="secondary" data-action="runAudit">Flow Audit</button>
                 <button class="secondary" data-action="runProposal">Proposal</button>
             </div>
+            <button class="ghost" data-action="copyReviewBundle">Copy AI review bundle</button>
         </div>
 
         <!-- Tab Navigation -->
         <div class="tabs">
-            <button class="tab active" data-tab="findings">Findings</button>
+            <button class="tab active" data-tab="review">Review</button>
             <button class="tab" data-tab="organize">Organize</button>
-            <button class="tab" data-tab="config">Config</button>
-            <button class="tab" data-tab="skills">Skills</button>
-            <button class="tab" data-tab="status">Status</button>
+            <button class="tab" data-tab="settings">Settings</button>
         </div>
 
-        <!-- Tab: Findings -->
-        <div id="tab-findings" class="tab-content active">
+        <!-- Tab: Review -->
+        <div id="tab-review" class="tab-content active">
             <div id="binaryAlert" class="alert warn" style="display: none;">
                 CLI not available. <a href="#" data-action="copyInstall">Copy install command</a>
             </div>
@@ -1215,8 +1870,35 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                     <span class="label">Last proposal</span>
                     <span class="value" id="lastProposal"></span>
                 </div>
+                <div class="card-row">
+                    <span class="label">Markdown scan</span>
+                    <span class="value" id="lastMarkdown"></span>
+                </div>
+            </div>
+            <div id="markdownCard" class="card" style="display: none;">
+                <div class="card-row">
+                    <span class="label">Markdown issues</span>
+                    <span class="value" id="markdownCount"></span>
+                </div>
+                <div id="markdownFiles" class="list"></div>
+                <div class="divider"></div>
+                <div class="card-row">
+                    <span class="label">Repo issues</span>
+                    <span class="value" id="repoIssuesCount"></span>
+                </div>
+                <div id="repoIssues" class="list"></div>
+                <button class="ghost" data-action="openMarkdownReport">Open Markdown Report</button>
+            </div>
+            <div id="flowCard" class="card" style="display: none;">
+                <div class="card-row">
+                    <span class="label">Flow findings</span>
+                    <span class="value" id="flowCount"></span>
+                </div>
+                <div id="flowFindings" class="list"></div>
+                <button class="ghost" data-action="openFlowAudit">Open Flow Audit</button>
             </div>
             <button class="ghost" data-action="newFlow">+ New Flow Spec</button>
+            <button class="ghost" data-action="openFlowMap">Open Flow Map</button>
         </div>
 
         <!-- Tab: Organize -->
@@ -1242,6 +1924,7 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                     <button class="secondary" data-action="orgFixCursor">Fix with Cursor</button>
                     <button class="secondary" data-action="orgFixClaude">Fix with Claude</button>
                 </div>
+                <button class="secondary" data-action="orgFixCodex">Fix with Codex</button>
             </div>
             <div id="orgFindings" class="card" style="display: none;">
                 <div class="section-title">Findings</div>
@@ -1260,178 +1943,199 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
             </div>
         </div>
 
-        <!-- Tab: Config -->
-        <div id="tab-config" class="tab-content">
+        <!-- Tab: Settings -->
+        <div id="tab-settings" class="tab-content">
             <div>
-                <div class="section-title">Categories</div>
-                <div class="card">
-                    <div id="categoryToggles" class="toggle-grid"></div>
-                </div>
-            </div>
-            <div>
-                <div class="section-title">Ignore Patterns</div>
-                <div class="card">
-                    <div id="ignoreGlobsList" class="tag-list"></div>
-                    <div class="input-row">
-                        <input id="ignoreInput" type="text" placeholder="e.g. **/dist/**" />
-                        <button class="secondary" data-action="addIgnore">Add</button>
-                    </div>
-                </div>
-            </div>
-            <div>
-                <div class="section-title">File Types</div>
-                <div class="card">
-                    <div id="fileTypeToggles" class="toggle-grid"></div>
-                </div>
-            </div>
-            <div>
-                <div class="section-title">Profiles</div>
+                <div class="section-title">UI</div>
                 <div class="card">
                     <div class="card-row">
-                        <span class="label">Active</span>
-                        <span class="value" id="currentProfile"></span>
-                    </div>
-                    <div id="profileOptions" class="input-row" style="flex-wrap: wrap;"></div>
-                    <button class="ghost" data-action="clearProfile">Clear Profile</button>
-                </div>
-            </div>
-            <div>
-                <div class="section-title">Quick Settings</div>
-                <div class="card">
-                    <label class="toggle">
-                        <input id="strictToggle" type="checkbox" />
-                        Strict mode
-                    </label>
-                    <label class="toggle">
-                        <input id="repoToggle" type="checkbox" />
-                        Skip repo-wide checks
-                    </label>
-                </div>
-            </div>
-            <div class="card">
-                <button class="secondary" data-action="openConfig">Open Config File</button>
-            </div>
-        </div>
-
-        <!-- Tab: Skills -->
-        <div id="tab-skills" class="tab-content">
-            <div>
-                <div class="section-title">AI Editor</div>
-                <div class="card">
-                    <div class="card-row">
-                        <span class="label">Default</span>
-                        <select id="defaultAIEditor" class="value">
-                            <option value="auto">Auto-detect</option>
-                            <option value="cursor">Cursor</option>
-                            <option value="claude-code">Claude Code</option>
-                            <option value="codex">Codex</option>
+                        <span class="label">Theme</span>
+                        <select id="uiTheme" class="value">
+                            <option value="vscode">VS Code</option>
+                            <option value="maple">Maple</option>
                         </select>
                     </div>
                 </div>
             </div>
-            <div>
-                <div class="section-title">Writing Style</div>
-                <div class="card">
-                    <div class="card-row" data-skill="writing" data-env="cursor">
-                        <span class="label">Cursor</span>
-                        <div class="input-row">
-                            <span class="badge" data-skill-badge>—</span>
-                            <button data-action="installSkill" data-kind="writing" data-env="cursor">Install</button>
+            <details class="accordion">
+                <summary>ToneGuard Config</summary>
+                <div class="accordion-body">
+                    <div>
+                        <div class="section-title">Categories</div>
+                        <div class="card">
+                            <div id="categoryToggles" class="toggle-grid"></div>
                         </div>
                     </div>
-                    <div class="card-row" data-skill="writing" data-env="claude">
-                        <span class="label">Claude</span>
-                        <div class="input-row">
-                            <span class="badge" data-skill-badge>—</span>
-                            <button data-action="installSkill" data-kind="writing" data-env="claude">Install</button>
+                    <div>
+                        <div class="section-title">Ignore Patterns</div>
+                        <div class="card">
+                            <div id="ignoreGlobsList" class="tag-list"></div>
+                            <div class="input-row">
+                                <input id="ignoreInput" type="text" placeholder="e.g. **/dist/**" />
+                                <button class="secondary" data-action="addIgnore">Add</button>
+                            </div>
                         </div>
                     </div>
-                    <div class="card-row" data-skill="writing" data-env="codex">
-                        <span class="label">Codex</span>
-                        <div class="input-row">
-                            <span class="badge" data-skill-badge>—</span>
-                            <button data-action="installSkill" data-kind="writing" data-env="codex">Install</button>
+                    <div>
+                        <div class="section-title">File Types</div>
+                        <div class="card">
+                            <div id="fileTypeToggles" class="toggle-grid"></div>
                         </div>
                     </div>
-                    <button class="ghost" data-action="installSkill" data-kind="writing" data-env="all">Install All</button>
+                    <div>
+                        <div class="section-title">Profiles</div>
+                        <div class="card">
+                            <div class="card-row">
+                                <span class="label">Active</span>
+                                <span class="value" id="currentProfile"></span>
+                            </div>
+                            <div id="profileOptions" class="input-row" style="flex-wrap: wrap;"></div>
+                            <button class="ghost" data-action="clearProfile">Clear Profile</button>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="section-title">Quick Settings</div>
+                        <div class="card">
+                            <label class="toggle">
+                                <input id="strictToggle" type="checkbox" />
+                                Strict mode
+                            </label>
+                            <label class="toggle">
+                                <input id="repoToggle" type="checkbox" />
+                                Skip repo-wide checks
+                            </label>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <button class="secondary" data-action="openConfig">Open Config File</button>
+                    </div>
                 </div>
-            </div>
-            <div>
-                <div class="section-title">Logic Flow Guardrails</div>
-                <div class="card">
-                    <div class="card-row" data-skill="logic-flow" data-env="cursor">
-                        <span class="label">Cursor</span>
-                        <div class="input-row">
-                            <span class="badge" data-skill-badge>—</span>
-                            <button data-action="installSkill" data-kind="logic-flow" data-env="cursor">Install</button>
-                        </div>
-                    </div>
-                    <div class="card-row" data-skill="logic-flow" data-env="claude">
-                        <span class="label">Claude</span>
-                        <div class="input-row">
-                            <span class="badge" data-skill-badge>—</span>
-                            <button data-action="installSkill" data-kind="logic-flow" data-env="claude">Install</button>
-                        </div>
-                    </div>
-                    <div class="card-row" data-skill="logic-flow" data-env="codex">
-                        <span class="label">Codex</span>
-                        <div class="input-row">
-                            <span class="badge" data-skill-badge>—</span>
-                            <button data-action="installSkill" data-kind="logic-flow" data-env="codex">Install</button>
-                        </div>
-                    </div>
-                    <button class="ghost" data-action="installSkill" data-kind="logic-flow" data-env="all">Install All</button>
-                </div>
-            </div>
-        </div>
+            </details>
 
-        <!-- Tab: Status -->
-        <div id="tab-status" class="tab-content">
-            <div class="section-title">Environment</div>
-            <div class="card">
-                <div class="card-row">
-                    <span class="label">Platform</span>
-                    <span class="value" id="platform"></span>
+            <details class="accordion">
+                <summary>AI Skills</summary>
+                <div class="accordion-body">
+                    <div>
+                        <div class="section-title">AI Editor</div>
+                        <div class="card">
+                            <div class="card-row">
+                                <span class="label">Default</span>
+                                <select id="defaultAIEditor" class="value">
+                                    <option value="auto">Auto-detect</option>
+                                    <option value="cursor">Cursor</option>
+                                    <option value="claude-code">Claude Code</option>
+                                    <option value="codex">Codex</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="section-title">Writing Style</div>
+                        <div class="card">
+                            <div class="card-row" data-skill="writing" data-env="cursor">
+                                <span class="label">Cursor</span>
+                                <div class="input-row">
+                                    <span class="badge" data-skill-badge>—</span>
+                                    <button data-action="installSkill" data-kind="writing" data-env="cursor">Install</button>
+                                </div>
+                            </div>
+                            <div class="card-row" data-skill="writing" data-env="claude">
+                                <span class="label">Claude</span>
+                                <div class="input-row">
+                                    <span class="badge" data-skill-badge>—</span>
+                                    <button data-action="installSkill" data-kind="writing" data-env="claude">Install</button>
+                                </div>
+                            </div>
+                            <div class="card-row" data-skill="writing" data-env="codex">
+                                <span class="label">Codex</span>
+                                <div class="input-row">
+                                    <span class="badge" data-skill-badge>—</span>
+                                    <button data-action="installSkill" data-kind="writing" data-env="codex">Install</button>
+                                </div>
+                            </div>
+                            <button class="ghost" data-action="installSkill" data-kind="writing" data-env="all">Install All</button>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="section-title">Logic Flow Guardrails</div>
+                        <div class="card">
+                            <div class="card-row" data-skill="logic-flow" data-env="cursor">
+                                <span class="label">Cursor</span>
+                                <div class="input-row">
+                                    <span class="badge" data-skill-badge>—</span>
+                                    <button data-action="installSkill" data-kind="logic-flow" data-env="cursor">Install</button>
+                                </div>
+                            </div>
+                            <div class="card-row" data-skill="logic-flow" data-env="claude">
+                                <span class="label">Claude</span>
+                                <div class="input-row">
+                                    <span class="badge" data-skill-badge>—</span>
+                                    <button data-action="installSkill" data-kind="logic-flow" data-env="claude">Install</button>
+                                </div>
+                            </div>
+                            <div class="card-row" data-skill="logic-flow" data-env="codex">
+                                <span class="label">Codex</span>
+                                <div class="input-row">
+                                    <span class="badge" data-skill-badge>—</span>
+                                    <button data-action="installSkill" data-kind="logic-flow" data-env="codex">Install</button>
+                                </div>
+                            </div>
+                            <button class="ghost" data-action="installSkill" data-kind="logic-flow" data-env="all">Install All</button>
+                        </div>
+                    </div>
                 </div>
-                <div class="card-row">
-                    <span class="label">CLI</span>
-                    <span class="value" id="cliPath"></span>
+            </details>
+
+            <details class="accordion">
+                <summary>Status</summary>
+                <div class="accordion-body">
+                    <div class="section-title">Environment</div>
+                    <div class="card">
+                        <div class="card-row">
+                            <span class="label">Platform</span>
+                            <span class="value" id="platform"></span>
+                        </div>
+                        <div class="card-row">
+                            <span class="label">CLI</span>
+                            <span class="value" id="cliPath"></span>
+                        </div>
+                        <div class="card-row">
+                            <span class="label">LSP</span>
+                            <span class="value" id="lspPath"></span>
+                        </div>
+                    </div>
+                    <div class="section-title">Config</div>
+                    <div class="card">
+                        <div class="card-row">
+                            <span class="label">Path</span>
+                            <span class="value" id="configPath"></span>
+                        </div>
+                        <div class="card-row">
+                            <span class="label">Source</span>
+                            <span class="badge" id="configSource"></span>
+                        </div>
+                        <div class="card-row">
+                            <span class="label">Flows</span>
+                            <span class="value" id="flowsCount"></span>
+                        </div>
+                    </div>
+                    <div class="section-title">Detected AI Environments</div>
+                    <div class="card">
+                        <div class="card-row">
+                            <span class="label">Cursor</span>
+                            <span class="badge" id="envCursor">—</span>
+                        </div>
+                        <div class="card-row">
+                            <span class="label">Claude Code</span>
+                            <span class="badge" id="envClaude">—</span>
+                        </div>
+                        <div class="card-row">
+                            <span class="label">Codex</span>
+                            <span class="badge" id="envCodex">—</span>
+                        </div>
+                    </div>
                 </div>
-                <div class="card-row">
-                    <span class="label">LSP</span>
-                    <span class="value" id="lspPath"></span>
-                </div>
-            </div>
-            <div class="section-title">Config</div>
-            <div class="card">
-                <div class="card-row">
-                    <span class="label">Path</span>
-                    <span class="value" id="configPath"></span>
-                </div>
-                <div class="card-row">
-                    <span class="label">Source</span>
-                    <span class="badge" id="configSource"></span>
-                </div>
-                <div class="card-row">
-                    <span class="label">Flows</span>
-                    <span class="value" id="flowsCount"></span>
-                </div>
-            </div>
-            <div class="section-title">Detected AI Environments</div>
-            <div class="card">
-                <div class="card-row">
-                    <span class="label">Cursor</span>
-                    <span class="badge" id="envCursor">—</span>
-                </div>
-                <div class="card-row">
-                    <span class="label">Claude Code</span>
-                    <span class="badge" id="envClaude">—</span>
-                </div>
-                <div class="card-row">
-                    <span class="label">Codex</span>
-                    <span class="badge" id="envCodex">—</span>
-                </div>
-            </div>
+            </details>
         </div>
     </div>
 
@@ -1484,6 +2188,117 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                 setText('lastProposal', state.lastProposal.when);
             } else {
                 setText('lastProposal', 'none');
+            }
+
+            if (state.lastMarkdown) {
+                setText(
+                    'lastMarkdown',
+                    state.lastMarkdown.findings + ' issues · ' + state.lastMarkdown.when
+                );
+            } else {
+                setText('lastMarkdown', 'none');
+            }
+
+            const markdownCard = document.getElementById('markdownCard');
+            const markdownFiles = document.getElementById('markdownFiles');
+            const repoIssues = document.getElementById('repoIssues');
+            if (state.markdownSummary && markdownCard && markdownFiles && repoIssues) {
+                markdownCard.style.display = 'grid';
+                const repoIssueCount = state.markdownSummary.repoIssuesCount || 0;
+                const totalIssues = state.markdownSummary.diagnostics + repoIssueCount;
+                setText(
+                    'markdownCount',
+                    totalIssues + ' issues · ' + state.markdownSummary.files + ' files'
+                );
+                setText('repoIssuesCount', repoIssueCount === 0 ? 'none' : String(repoIssueCount));
+                markdownFiles.innerHTML = '';
+                if (state.markdownSummary.topFiles.length === 0) {
+                    const empty = document.createElement('div');
+                    empty.className = 'empty-state';
+                    empty.textContent = 'No markdown issues';
+                    markdownFiles.appendChild(empty);
+                } else {
+                    state.markdownSummary.topFiles.forEach((file) => {
+                        const row = document.createElement('div');
+                        row.className = 'list-item';
+                        row.dataset.action = 'openMarkdownFile';
+                        row.dataset.path = file.path;
+                        if (file.line) {
+                            row.dataset.line = String(file.line);
+                        }
+                        const path = document.createElement('span');
+                        path.className = 'path';
+                        path.textContent = file.path;
+                        const count = document.createElement('span');
+                        count.className = 'count';
+                        count.textContent = String(file.count);
+                        row.appendChild(path);
+                        row.appendChild(count);
+                        markdownFiles.appendChild(row);
+                    });
+                }
+
+                repoIssues.innerHTML = '';
+                if (!state.markdownSummary.repoIssues || state.markdownSummary.repoIssues.length === 0) {
+                    const empty = document.createElement('div');
+                    empty.className = 'empty-state';
+                    empty.textContent = 'No repo issues';
+                    repoIssues.appendChild(empty);
+                } else {
+                    state.markdownSummary.repoIssues.forEach((issue) => {
+                        const row = document.createElement('div');
+                        row.className = 'list-item';
+                        row.dataset.action = 'openMarkdownFile';
+                        row.dataset.path = issue.path;
+                        const msg = document.createElement('span');
+                        msg.className = 'path';
+                        msg.textContent = issue.message;
+                        const cat = document.createElement('span');
+                        cat.className = 'count';
+                        cat.textContent = issue.category;
+                        row.appendChild(msg);
+                        row.appendChild(cat);
+                        repoIssues.appendChild(row);
+                    });
+                }
+            } else if (markdownCard) {
+                markdownCard.style.display = 'none';
+            }
+
+            const flowCard = document.getElementById('flowCard');
+            const flowFindings = document.getElementById('flowFindings');
+            if (state.flowSummary && flowCard && flowFindings) {
+                flowCard.style.display = 'grid';
+                setText('flowCount', state.flowSummary.findings + ' finding(s)');
+                flowFindings.innerHTML = '';
+                if (state.flowSummary.topFindings.length === 0) {
+                    const empty = document.createElement('div');
+                    empty.className = 'empty-state';
+                    empty.textContent = 'No flow findings';
+                    flowFindings.appendChild(empty);
+                } else {
+                    state.flowSummary.topFindings.forEach((f) => {
+                        const row = document.createElement('div');
+                        row.className = 'list-item';
+                        row.dataset.action = 'openFlowFinding';
+                        row.dataset.path = f.path;
+                        if (f.line) {
+                            row.dataset.line = String(f.line);
+                        }
+                        const msg = document.createElement('span');
+                        msg.className = 'path';
+                        msg.textContent = f.message;
+                        const loc = document.createElement('span');
+                        loc.className = 'count';
+                        const base = f.path ? (f.path.split(/[/\\\\]/).pop() || f.path) : '';
+                        loc.textContent = base + (f.line ? \`:\${f.line}\` : '');
+                        row.appendChild(msg);
+                        row.appendChild(loc);
+                        flowFindings.appendChild(row);
+                    });
+                }
+            } else if (flowCard) {
+                flowCard.style.display = 'none';
             }
 
             setText(
@@ -1608,6 +2423,36 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
 
         render(state);
 
+        function getUiState() {
+            return vscode.getState() || {};
+        }
+
+        function applyUiTheme(theme) {
+            const value = theme === 'maple' ? 'maple' : 'vscode';
+            if (value === 'maple') {
+                document.documentElement.setAttribute('data-theme', 'maple');
+            } else {
+                document.documentElement.removeAttribute('data-theme');
+            }
+            const uiTheme = document.getElementById('uiTheme');
+            if (uiTheme) {
+                uiTheme.value = value;
+            }
+        }
+
+        const uiThemeSelect = document.getElementById('uiTheme');
+        if (uiThemeSelect) {
+            const saved = getUiState();
+            const initialTheme =
+                typeof saved.uiTheme === 'string' ? saved.uiTheme : 'vscode';
+            applyUiTheme(initialTheme);
+            uiThemeSelect.addEventListener('change', () => {
+                const nextTheme = uiThemeSelect.value || 'vscode';
+                applyUiTheme(nextTheme);
+                vscode.setState({ ...getUiState(), uiTheme: nextTheme });
+            });
+        }
+
         window.addEventListener('message', (event) => {
             const message = event.data;
             if (message && message.type === 'state') {
@@ -1615,22 +2460,34 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
             }
         });
 
+        function setActiveTab(tabName) {
+            const requested = tabName || 'review';
+            const hasTab = Array.from(document.querySelectorAll('.tab')).some(
+                (t) => t.dataset.tab === requested
+            );
+            const name = hasTab ? requested : 'review';
+            document.querySelectorAll('.tab').forEach(t => {
+                t.classList.toggle('active', t.dataset.tab === name);
+            });
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.toggle('active', content.id === 'tab-' + name);
+            });
+            vscode.setState({ ...getUiState(), activeTab: name });
+        }
+
         // Tab switching
         document.querySelectorAll('.tab').forEach((tab) => {
             tab.addEventListener('click', () => {
                 const tabName = tab.dataset.tab;
                 if (!tabName) return;
-                
-                // Update active tab button
-                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-                tab.classList.add('active');
-                
-                // Update active tab content
-                document.querySelectorAll('.tab-content').forEach(content => {
-                    content.classList.toggle('active', content.id === 'tab-' + tabName);
-                });
+                setActiveTab(tabName);
             });
         });
+
+        const savedTab = getUiState().activeTab;
+        if (typeof savedTab === 'string') {
+            setActiveTab(savedTab);
+        }
 
         // Show binary alert if not available
         if (!state.binaryAvailable) {
@@ -1711,6 +2568,30 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                 });
         return;
     }
+            if (action === 'openMarkdownFile') {
+                vscode.postMessage({
+                    type: 'openMarkdownFile',
+                    path: actionEl.dataset.path,
+                    line: actionEl.dataset.line ? Number(actionEl.dataset.line) : undefined,
+                });
+                return;
+            }
+            if (action === 'openMarkdownReport') {
+                vscode.postMessage({ type: 'openMarkdownReport' });
+                return;
+            }
+            if (action === 'openFlowFinding') {
+                vscode.postMessage({
+                    type: 'openFlowFinding',
+                    path: actionEl.dataset.path,
+                    line: actionEl.dataset.line ? Number(actionEl.dataset.line) : undefined,
+                });
+                return;
+            }
+            if (action === 'openFlowAudit') {
+                vscode.postMessage({ type: 'openFlowAudit' });
+                return;
+            }
 
             vscode.postMessage({ type: action });
         });
@@ -2532,16 +3413,10 @@ async function fixWithAI(
     outputChannel.appendLine(`ToneGuard: Copied ${findings.length} fix instructions to clipboard`);
     
     if (env === 'claude') {
-        // Try to focus Claude terminal if it exists
-        const terminals = vscode.window.terminals;
-        const claudeTerminal = terminals.find(t => 
-            t.name.toLowerCase().includes('claude') || 
-            t.name.toLowerCase().includes('anthropic')
-        );
-        if (claudeTerminal) {
-            claudeTerminal.show();
-        void vscode.window.showInformationMessage(
-                `ToneGuard: ${findings.length} fix instructions copied. Press Cmd+V in Claude terminal.`
+        const pasted = tryPasteToTerminal(prompt, ['claude', 'anthropic']);
+        if (pasted) {
+            void vscode.window.showInformationMessage(
+                `ToneGuard: ${findings.length} fix instructions pasted into Claude terminal. Review and press Enter.`
             );
         } else {
             void vscode.window.showInformationMessage(
@@ -2549,16 +3424,10 @@ async function fixWithAI(
             );
         }
     } else {
-        // For Codex - try to focus the terminal
-        const terminals = vscode.window.terminals;
-        const codexTerminal = terminals.find(t => 
-            t.name.toLowerCase().includes('codex') || 
-            t.name.toLowerCase().includes('openai')
-        );
-        if (codexTerminal) {
-            codexTerminal.show();
+        const pasted = tryPasteToTerminal(prompt, ['codex', 'openai']);
+        if (pasted) {
             void vscode.window.showInformationMessage(
-                `ToneGuard: ${findings.length} fix instructions copied. Press Cmd+V in Codex terminal.`
+                `ToneGuard: ${findings.length} fix instructions pasted into Codex terminal. Review and press Enter.`
             );
         } else {
             void vscode.window.showInformationMessage(
@@ -2835,6 +3704,23 @@ function getEnvDisplayName(env: AIEnvironment): string {
     return 'Codex';
 }
 
+function tryPasteToTerminal(prompt: string, nameHints: string[]): boolean {
+    const terminal = vscode.window.terminals.find((t) => {
+        const name = t.name.toLowerCase();
+        return nameHints.some((hint) => name.includes(hint));
+    });
+    if (!terminal) {
+        return false;
+    }
+    terminal.show();
+    try {
+        terminal.sendText(prompt, false);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 /**
  * Installs the ToneGuard skill globally for the specified AI environment.
  * Skills are installed in ~/.cursor/skills/, ~/.claude/skills/, or ~/.codex/skills/
@@ -3059,6 +3945,49 @@ class FlowMapPanel {
                         }
                         break;
 
+                    case 'indexWorkspace':
+                        await this.indexWorkspace();
+                        break;
+
+                    case 'blueprintWorkspace':
+                        await this.blueprintWorkspace();
+                        break;
+
+                    case 'setTheme': {
+                        const value = typeof message.value === 'string' ? message.value : 'vscode';
+                        const config = vscode.workspace.getConfiguration('dwg');
+                        await config.update(
+                            'uiTheme',
+                            value,
+                            vscode.ConfigurationTarget.Global
+                        );
+                        void this.panel.webview.postMessage({ type: 'theme', value });
+                        break;
+                    }
+
+                    case 'copyText': {
+                        const text = typeof message.text === 'string' ? message.text : '';
+                        const label = typeof message.label === 'string' ? message.label : 'Text';
+                        if (!text) {
+                            void vscode.window.showErrorMessage('ToneGuard: Nothing to copy.');
+                            break;
+                        }
+                        // Avoid freezing the extension host by copying huge payloads by accident.
+                        if (text.length > 2_000_000) {
+                            const choice = await vscode.window.showWarningMessage(
+                                `ToneGuard: ${label} is large (${Math.ceil(text.length / 1024)} KB). Copy anyway?`,
+                                'Copy',
+                                'Cancel'
+                            );
+                            if (choice !== 'Copy') {
+                                break;
+                            }
+                        }
+                        await vscode.env.clipboard.writeText(text);
+                        void vscode.window.showInformationMessage(`ToneGuard: Copied ${label} to clipboard.`);
+                        break;
+                    }
+
                     case 'loadFunction':
                         this.loadFunction(message.file, message.functionName);
                         break;
@@ -3110,33 +4039,204 @@ class FlowMapPanel {
         });
     }
 
+    public setTheme(theme: string): void {
+        void this.panel.webview.postMessage({ type: 'theme', value: theme });
+    }
+
+    private async indexWorkspace(): Promise<void> {
+        const workspaceRoot = getWorkspaceRoot();
+        if (!workspaceRoot) {
+            void vscode.window.showErrorMessage('ToneGuard: No workspace open.');
+            return;
+        }
+
+        const reportsDir = path.join(workspaceRoot, 'reports');
+        if (!fs.existsSync(reportsDir)) {
+            fs.mkdirSync(reportsDir, { recursive: true });
+        }
+        const outFile = path.join(reportsDir, 'flow-index.json');
+
+        const args = [
+            'flow',
+            'index',
+            '--config',
+            this.configPath,
+            workspaceRoot,
+        ];
+
+        this.outputChannel.show(true);
+        this.outputChannel.appendLine(`ToneGuard: Running ${this.cliPath} ${args.join(' ')}`);
+
+        try {
+            const report = await new Promise<any>((resolve, reject) => {
+                execFile(
+                    this.cliPath,
+                    args,
+                    { cwd: workspaceRoot, maxBuffer: 10 * 1024 * 1024 },
+                    (error, stdout, stderr) => {
+                        if (stderr) {
+                            this.outputChannel.appendLine(stderr);
+                        }
+                        if (error) {
+                            reject(error);
+                            return;
+                        }
+                        try {
+                            const text = String(stdout);
+                            resolve(JSON.parse(text));
+                        } catch (e) {
+                            reject(new Error('Failed to parse flow index output'));
+                        }
+                    }
+                );
+            });
+
+            try {
+                fs.writeFileSync(outFile, JSON.stringify(report, null, 2), 'utf8');
+            } catch {
+                // Ignore write errors; still show in UI.
+            }
+
+            void this.panel.webview.postMessage({
+                type: 'indexData',
+                data: report,
+            });
+        } catch (error) {
+            const err = error as NodeJS.ErrnoException;
+            this.outputChannel.appendLine(`ToneGuard: Flow index failed: ${err.message}`);
+            void this.panel.webview.postMessage({
+                type: 'error',
+                message:
+                    err.message.includes("found")
+                        ? `Flow index failed: ${err.message}`
+                        : 'Flow index failed. Update the bundled CLI and try again.',
+            });
+        }
+    }
+
+    private async blueprintWorkspace(): Promise<void> {
+        const workspaceRoot = getWorkspaceRoot();
+        if (!workspaceRoot) {
+            void vscode.window.showErrorMessage('ToneGuard: No workspace open.');
+            return;
+        }
+
+        const reportsDir = path.join(workspaceRoot, 'reports');
+        if (!fs.existsSync(reportsDir)) {
+            fs.mkdirSync(reportsDir, { recursive: true });
+        }
+        const outFile = path.join(reportsDir, 'flow-blueprint.json');
+
+        const args = [
+            'flow',
+            'blueprint',
+            '--config',
+            this.configPath,
+            '--format',
+            'json',
+            '--out',
+            outFile,
+            workspaceRoot,
+        ];
+
+        this.outputChannel.show(true);
+        this.outputChannel.appendLine(`ToneGuard: Running ${this.cliPath} ${args.join(' ')}`);
+
+        try {
+            await new Promise<void>((resolve, reject) => {
+                execFile(
+                    this.cliPath,
+                    args,
+                    { cwd: workspaceRoot, maxBuffer: 20 * 1024 * 1024 },
+                    (error, stdout, stderr) => {
+                        if (stdout) {
+                            this.outputChannel.appendLine(String(stdout));
+                        }
+                        if (stderr) {
+                            this.outputChannel.appendLine(String(stderr));
+                        }
+                        if (error) {
+                            reject(error);
+                            return;
+                        }
+                        resolve();
+                    }
+                );
+            });
+
+            const report = JSON.parse(fs.readFileSync(outFile, 'utf-8'));
+            void this.panel.webview.postMessage({ type: 'blueprintData', data: report });
+        } catch (error) {
+            const err = error as NodeJS.ErrnoException;
+            this.outputChannel.appendLine(`ToneGuard: Flow blueprint failed: ${err.message}`);
+            void this.panel.webview.postMessage({
+                type: 'error',
+                message:
+                    err.message.includes('blueprint')
+                        ? `Flow blueprint failed: ${err.message}`
+                        : 'Flow blueprint failed. Update the bundled CLI and try again.',
+            });
+        }
+    }
+
     private async runCliGraph(
         filePath: string,
         functionName?: string
     ): Promise<any> {
-    return new Promise((resolve, reject) => {
-            const args = ['flow', 'graph', '--file', filePath, '--with-logic'];
-            if (functionName) {
-                args.push('--fn', functionName);
-            }
+        const workspaceRoot = getWorkspaceRoot();
+        const baseArgs = ['flow', 'graph', '--file', filePath, '--with-logic'];
+        if (functionName) {
+            baseArgs.push('--fn', functionName);
+        }
 
-            this.outputChannel.appendLine(`ToneGuard: Running ${this.cliPath} ${args.join(' ')}`);
+        const run = (args: string[]): Promise<string> => {
+            return new Promise((resolve, reject) => {
+                this.outputChannel.appendLine(
+                    `ToneGuard: Running ${this.cliPath} ${args.join(' ')}`
+                );
+                execFile(
+                    this.cliPath,
+                    args,
+                    { cwd: workspaceRoot, maxBuffer: 10 * 1024 * 1024 },
+                    (
+                        error: ExecFileException | null,
+                        stdout: string | Buffer,
+                        stderr: string | Buffer
+                    ) => {
+                        const stderrText =
+                            typeof stderr === 'string'
+                                ? stderr
+                                : stderr.toString('utf8');
+                        const stdoutText =
+                            typeof stdout === 'string'
+                                ? stdout
+                                : stdout.toString('utf8');
 
-            execFile(this.cliPath, args, { maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
-                if (error) {
-                    this.outputChannel.appendLine(`ToneGuard: Flow graph error: ${stderr || error.message}`);
-                    reject(new Error(stderr || error.message));
-                    return;
-                }
-
-                try {
-                    const data = JSON.parse(stdout);
-                    resolve(data);
-                } catch (e) {
-                    reject(new Error('Failed to parse CFG output'));
-                }
+                        if (stderrText) {
+                            this.outputChannel.appendLine(stderrText);
+                        }
+                        if (error) {
+                            reject(new Error(stderrText || error.message));
+                            return;
+                        }
+                        resolve(stdoutText);
+                    }
+                );
             });
-        });
+        };
+
+        const withMermaid = [...baseArgs, '--include-mermaid'];
+        try {
+            const stdoutText = await run(withMermaid);
+            return JSON.parse(stdoutText);
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            if (message.includes('--include-mermaid')) {
+                const stdoutText = await run(baseArgs);
+                return JSON.parse(stdoutText);
+            }
+            throw err;
+        }
     }
 
     private update(): void {
@@ -3147,6 +4247,33 @@ class FlowMapPanel {
 
     private getHtmlForWebview(webview: vscode.Webview): string {
         const nonce = getNonce();
+
+        const stylePath = vscode.Uri.joinPath(this.extensionUri, 'media', 'style.css');
+        const scriptPath = vscode.Uri.joinPath(this.extensionUri, 'media', 'flowmap.js');
+        if (fs.existsSync(stylePath.fsPath) && fs.existsSync(scriptPath.fsPath)) {
+            const styleUri = webview.asWebviewUri(stylePath);
+            const scriptUri = webview.asWebviewUri(scriptPath);
+            const uiTheme = vscode.workspace
+                .getConfiguration('dwg')
+                .get<string>('uiTheme', 'vscode');
+            const initJson = JSON.stringify({ uiTheme }).replace(/</g, '\\u003c');
+
+            return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} https:; style-src ${webview.cspSource}; font-src ${webview.cspSource}; script-src ${webview.cspSource} 'nonce-${nonce}';">
+    <link rel="stylesheet" href="${styleUri}">
+    <title>ToneGuard Flow Map</title>
+</head>
+<body>
+    <div id="app"></div>
+    <script nonce="${nonce}">window.__TONEGUARD_FLOWMAP_INITIAL_STATE__ = ${initJson};</script>
+    <script nonce="${nonce}" src="${scriptUri}"></script>
+</body>
+</html>`;
+        }
 
         return `<!DOCTYPE html>
 <html lang="en">
@@ -3192,6 +4319,10 @@ class FlowMapPanel {
         }
         button:hover { opacity: 0.9; }
         button:disabled { opacity: 0.5; cursor: not-allowed; }
+        button.secondary {
+            background: var(--vscode-button-secondaryBackground);
+            color: var(--vscode-button-secondaryForeground);
+        }
         select {
             background: var(--input-bg);
             color: var(--fg);
@@ -3199,6 +4330,15 @@ class FlowMapPanel {
             padding: 8px;
             border-radius: 4px;
             min-width: 200px;
+        }
+        input[type="text"] {
+            background: var(--input-bg);
+            color: var(--fg);
+            border: 1px solid var(--input-border);
+            padding: 8px;
+            border-radius: 4px;
+            width: 100%;
+            font-size: 12px;
         }
         .file-path {
             font-size: 12px;
@@ -3320,9 +4460,10 @@ class FlowMapPanel {
     </style>
 </head>
 <body>
-    <h1>🔀 Flow Map</h1>
+    <h1>Flow Map</h1>
     <div class="toolbar">
-        <button id="selectFileBtn">📂 Select File</button>
+        <button id="selectFileBtn">Select File</button>
+        <button id="indexWorkspaceBtn" class="secondary">Index Workspace</button>
         <select id="functionSelect" disabled>
             <option value="">-- Select a function --</option>
         </select>
@@ -3332,6 +4473,7 @@ class FlowMapPanel {
     <div class="container">
         <div class="sidebar">
             <h3>Functions</h3>
+            <input id="searchInput" type="text" placeholder="Search functions…" disabled />
             <ul class="function-list" id="functionList">
                 <li class="empty-state">Select a file to see functions</li>
             </ul>
@@ -3355,9 +4497,28 @@ class FlowMapPanel {
         const vscode = acquireVsCodeApi();
         let currentData = null;
         let currentFile = '';
+        let indexItems = null;
 
         document.getElementById('selectFileBtn').addEventListener('click', () => {
             vscode.postMessage({ command: 'selectFile' });
+        });
+
+        const indexBtn = document.getElementById('indexWorkspaceBtn');
+        const searchInput = document.getElementById('searchInput');
+
+        indexBtn.addEventListener('click', () => {
+            indexBtn.disabled = true;
+            const list = document.getElementById('functionList');
+            if (list) {
+                list.innerHTML = '<li class="loading">Indexing workspace…</li>';
+            }
+            vscode.postMessage({ command: 'indexWorkspace' });
+        });
+
+        searchInput.addEventListener('input', () => {
+            if (Array.isArray(indexItems)) {
+                renderIndexList(indexItems);
+            }
         });
 
         document.getElementById('functionSelect').addEventListener('change', (e) => {
@@ -3371,6 +4532,14 @@ class FlowMapPanel {
             const message = event.data;
             
             if (message.type === 'graphData') {
+                indexItems = null;
+                if (searchInput) {
+                    searchInput.value = '';
+                    searchInput.disabled = true;
+                }
+                if (indexBtn) {
+                    indexBtn.disabled = false;
+                }
                 currentData = message.data;
                 currentFile = message.filePath || '';
                 document.getElementById('filePath').textContent = currentFile;
@@ -3397,8 +4566,31 @@ class FlowMapPanel {
             }
             
             if (message.type === 'error') {
+                if (indexBtn) {
+                    indexBtn.disabled = false;
+                }
                 document.getElementById('graphContainer').innerHTML = 
                     '<div class="error-msg">' + escapeHtml(message.message) + '</div>';
+            }
+
+            if (message.type === 'indexData') {
+                const data = message.data || {};
+                const items = Array.isArray(data.items) ? data.items : [];
+                indexItems = items;
+                if (searchInput) {
+                    searchInput.disabled = false;
+                }
+                if (indexBtn) {
+                    indexBtn.disabled = false;
+                }
+                renderIndexList(items);
+                document.getElementById('filePath').textContent =
+                    items.length + ' functions indexed';
+                const select = document.getElementById('functionSelect');
+                if (select) {
+                    select.innerHTML = '<option value="">-- Select from list --</option>';
+                    select.disabled = true;
+                }
             }
         });
 
@@ -3440,6 +4632,50 @@ class FlowMapPanel {
             });
         }
 
+        function renderIndexList(items) {
+            const list = document.getElementById('functionList');
+            if (!list) return;
+
+            const q = (searchInput && searchInput.value ? searchInput.value : '').toLowerCase().trim();
+            const filtered = q.length === 0 ? items : items.filter(it => {
+                const name = String(it.display_name || '').toLowerCase();
+                const file = String(it.file_display || it.file || '').toLowerCase();
+                return name.includes(q) || file.includes(q);
+            });
+
+            if (!filtered || filtered.length === 0) {
+                list.innerHTML = '<li class="empty-state">No matches</li>';
+                return;
+            }
+
+            list.innerHTML = filtered.slice(0, 500).map(it => {
+                const display = escapeHtml(it.display_name || it.target_name || 'function');
+                const file = escapeHtml(it.file_display || it.file || '');
+                const line = it.start_line ? String(it.start_line) : '';
+                return (
+                    '<li data-fn="' + display + '" data-target="' + escapeHtml(it.target_name || '') + '" data-file="' + escapeHtml(it.file || '') + '" data-line="' + line + '">' +
+                    '<strong>' + display + '</strong>' +
+                    '<div class="function-stats">' + file + (line ? (':' + line) : '') + '</div>' +
+                    '</li>'
+                );
+            }).join('');
+
+            list.querySelectorAll('li[data-file]').forEach(li => {
+                li.addEventListener('click', () => {
+                    const file = li.getAttribute('data-file');
+                    const target = li.getAttribute('data-target');
+                    const line = li.getAttribute('data-line');
+                    if (file && target) {
+                        currentFile = file;
+                        document.getElementById('filePath').textContent =
+                            file + (line ? (':' + line) : '');
+                        vscode.postMessage({ command: 'loadFunction', file, functionName: target });
+                        highlightFunction(li.getAttribute('data-fn'));
+                    }
+                });
+            });
+        }
+
         function highlightFunction(name) {
             document.querySelectorAll('.function-list li').forEach(li => {
                 li.classList.toggle('selected', li.getAttribute('data-fn') === name);
@@ -3461,7 +4697,7 @@ class FlowMapPanel {
                     '<h3>' + escapeHtml(cfg.name) + ' (line ' + cfg.start_line + ')</h3>' +
                     '<p>Language: ' + cfg.language + '</p>' +
                     '<p>' + cfg.nodes + ' nodes, ' + cfg.edges + ' edges, ' + cfg.exits.length + ' exit points</p>' +
-                    (cfg.unreachable > 0 ? '<p style="color: var(--vscode-editorWarning-foreground)">⚠️ ' + cfg.unreachable + ' unreachable nodes detected</p>' : '') +
+                    (cfg.unreachable > 0 ? '<p style="color: var(--vscode-editorWarning-foreground)">Warning: ' + cfg.unreachable + ' unreachable nodes detected</p>' : '') +
                     '<p>Exit node IDs: ' + cfg.exits.join(', ') + '</p>';
             }
         }
@@ -3531,11 +4767,6 @@ export function activate(context: vscode.ExtensionContext): void {
     outputChannel.appendLine(`ToneGuard: Using CLI: ${cliCommand}`);
     outputChannel.appendLine(`ToneGuard: Using config: ${configPath}`);
 
-    const sidebarProvider = new ToneGuardSidebarProvider();
-    context.subscriptions.push(
-        vscode.window.registerTreeDataProvider('toneguard.sidebar', sidebarProvider)
-    );
-
     const dashboardProvider = new ToneGuardDashboardProvider(
         context,
         outputChannel,
@@ -3550,7 +4781,6 @@ export function activate(context: vscode.ExtensionContext): void {
     );
 
     const refreshAll = (): void => {
-        sidebarProvider.refresh();
         void dashboardProvider.refresh();
     };
     context.subscriptions.push(
@@ -3646,6 +4876,14 @@ export function activate(context: vscode.ExtensionContext): void {
     proposalWatcher.onDidDelete(() => refreshAll());
     context.subscriptions.push(proposalWatcher);
 
+    const markdownWatcher = vscode.workspace.createFileSystemWatcher(
+        '**/reports/markdown-lint.json'
+    );
+    markdownWatcher.onDidCreate(() => refreshAll());
+    markdownWatcher.onDidChange(() => refreshAll());
+    markdownWatcher.onDidDelete(() => refreshAll());
+    context.subscriptions.push(markdownWatcher);
+
     const flowsWatcher = vscode.workspace.createFileSystemWatcher('**/flows/*');
     flowsWatcher.onDidCreate(() => refreshAll());
     flowsWatcher.onDidChange(() => refreshAll());
@@ -3667,10 +4905,12 @@ export function activate(context: vscode.ExtensionContext): void {
                 config.get<string>('configPath', 'layth-style.yml')
             );
             const nextProfile = config.get<string>('profile', '').trim();
+            const nextTheme = config.get<string>('uiTheme', 'vscode');
 
             cliCommand = nextCli;
             configPath = nextConfigPath;
             profile = nextProfile;
+            FlowMapPanel.currentPanel?.setTheme(nextTheme);
             refreshAll();
         })
     );
@@ -3781,14 +5021,14 @@ export function activate(context: vscode.ExtensionContext): void {
             );
 
             function runCli(args: string[], title: string): Promise<void> {
-    return new Promise((resolve, reject) => {
+                return new Promise((resolve, reject) => {
                     outputChannel.show(true);
                     outputChannel.appendLine(`ToneGuard: ${title}`);
                     outputChannel.appendLine(`ToneGuard: ${cliCommand} ${args.join(' ')}`);
                     execFile(
                         cliCommand,
                         args,
-                        { cwd: workspaceRoot },
+                        { cwd: workspaceRoot, maxBuffer: 10 * 1024 * 1024 },
                         (error, stdout, stderr) => {
                             if (stdout) {
                                 outputChannel.appendLine(stdout);
@@ -3812,6 +5052,81 @@ export function activate(context: vscode.ExtensionContext): void {
                 fs.mkdirSync(reportsDir, { recursive: true });
             }
             const markdownLintPath = path.join(reportsDir, 'markdown-lint.json');
+            const flowIndexPath = path.join(reportsDir, 'flow-index.json');
+            const blueprintPath = path.join(reportsDir, 'flow-blueprint.json');
+            async function runMarkdownScan(root: string): Promise<number | null> {
+                const resolvedConfigPath = configPath || 'layth-style.yml';
+                const args = ['--config', resolvedConfigPath, '--json'];
+                const noRepoChecks = vscode.workspace
+                    .getConfiguration('dwg')
+                    .get<boolean>('noRepoChecks', false);
+                if (noRepoChecks) {
+                    args.push('--no-repo-checks');
+                }
+                args.push(root);
+                return new Promise((resolve) => {
+                    outputChannel.show(true);
+                    outputChannel.appendLine('ToneGuard: Scanning markdown files…');
+                    outputChannel.appendLine(`ToneGuard: ${cliCommand} ${args.join(' ')}`);
+                    execFile(
+                        cliCommand,
+                        args,
+                        { cwd: root, maxBuffer: 10 * 1024 * 1024 },
+                        (
+                            error: ExecFileException | null,
+                            stdout: string | Buffer,
+                            stderr: string | Buffer
+                        ) => {
+                            const stderrText =
+                                typeof stderr === 'string' ? stderr : stderr.toString('utf8');
+                            if (stderrText) {
+                                outputChannel.appendLine(stderrText);
+                            }
+                            let count: number | null = null;
+                            const stdoutText =
+                                typeof stdout === 'string' ? stdout : stdout.toString('utf8');
+                            if (stdoutText) {
+                                try {
+                                    const report = JSON.parse(stdoutText);
+                                    fs.writeFileSync(
+                                        markdownLintPath,
+                                        JSON.stringify(report, null, 2),
+                                        'utf8'
+                                    );
+                                    const repoIssues = Array.isArray(report?.repo_issues)
+                                        ? report.repo_issues.length
+                                        : 0;
+                                    if (typeof report?.total_diagnostics === 'number') {
+                                        count = report.total_diagnostics;
+                                    } else if (Array.isArray(report?.files)) {
+                                        count = report.files.reduce((sum: number, file: any) => {
+                                            const diags = Array.isArray(file?.diagnostics)
+                                                ? file.diagnostics.length
+                                                : 0;
+                                            return sum + diags;
+                                        }, 0);
+                                    }
+                                    const total = (count ?? 0) + repoIssues;
+                                    outputChannel.appendLine(
+                                        `ToneGuard: Markdown scan found ${total} issue(s).`
+                                    );
+                                    count = total;
+                                } catch {
+                                    outputChannel.appendLine(
+                                        'ToneGuard: Markdown scan output was not valid JSON.'
+                                    );
+                                }
+                            }
+                            if (error) {
+                                outputChannel.appendLine(
+                                    'ToneGuard: Markdown scan completed with issues (non-zero exit).'
+                                );
+                            }
+                            resolve(count);
+                        }
+                    );
+                });
+            }
 
             try {
                 await vscode.window.withProgress(
@@ -3823,21 +5138,7 @@ export function activate(context: vscode.ExtensionContext): void {
                     async (progress) => {
                         // Step 1: Lint markdown/prose files
                         progress.report({ message: 'Scanning markdown files…' });
-                        try {
-                            await runCli(
-                                [
-                                    '--config',
-                                    configPath,
-                                    '--json',
-                                    '--no-repo-checks',
-                                    workspaceRoot,
-                                ],
-                                'Scanning markdown files…'
-                            );
-                        } catch {
-                            // Markdown lint may exit non-zero if issues found, that's OK
-                            outputChannel.appendLine('ToneGuard: Markdown scan complete (issues may exist)');
-                        }
+                        await runMarkdownScan(workspaceRoot);
 
                         // Step 2: Run code flow audit  
                         progress.report({ message: 'Running flow audit…' });
@@ -3873,6 +5174,50 @@ export function activate(context: vscode.ExtensionContext): void {
                             ],
                             'Generating flow proposal…'
                         );
+
+                        // Step 4: Index functions (for Flow Map + LLM review)
+                        progress.report({ message: 'Indexing workspace…' });
+                        try {
+                            await runCli(
+                                [
+                                    'flow',
+                                    'index',
+                                    '--config',
+                                    configPath,
+                                    '--out',
+                                    flowIndexPath,
+                                    workspaceRoot,
+                                ],
+                                'Indexing workspace…'
+                            );
+                        } catch {
+                            outputChannel.appendLine(
+                                'ToneGuard: Flow index failed (optional step).'
+                            );
+                        }
+
+                        // Step 5: Build blueprint graph (files + edges)
+                        progress.report({ message: 'Building blueprint…' });
+                        try {
+                            await runCli(
+                                [
+                                    'flow',
+                                    'blueprint',
+                                    '--config',
+                                    configPath,
+                                    '--format',
+                                    'json',
+                                    '--out',
+                                    blueprintPath,
+                                    workspaceRoot,
+                                ],
+                                'Building blueprint…'
+                            );
+                        } catch {
+                            outputChannel.appendLine(
+                                'ToneGuard: Flow blueprint failed (optional step).'
+                            );
+                        }
                     }
                 );
 
@@ -3938,16 +5283,10 @@ export function activate(context: vscode.ExtensionContext): void {
                 } else if (choice === 'Fix with Claude') {
                     const prompt = generateFixPrompt(findings);
                     await vscode.env.clipboard.writeText(prompt);
-                    // Try to focus Claude Code terminal if it exists
-                    const terminals = vscode.window.terminals;
-                    const claudeTerminal = terminals.find(t => 
-                        t.name.toLowerCase().includes('claude') || 
-                        t.name.toLowerCase().includes('anthropic')
-                    );
-                    if (claudeTerminal) {
-                        claudeTerminal.show();
+                    const pasted = tryPasteToTerminal(prompt, ['claude', 'anthropic']);
+                    if (pasted) {
                         void vscode.window.showInformationMessage(
-                            `ToneGuard: ${findingCount} fix instructions copied. Press Cmd+V in Claude terminal.`
+                            `ToneGuard: ${findingCount} fix instructions pasted into Claude terminal. Review and press Enter.`
                         );
                     } else {
                         void vscode.window.showInformationMessage(
@@ -3957,16 +5296,10 @@ export function activate(context: vscode.ExtensionContext): void {
                 } else if (choice === 'Fix with Codex') {
                     const prompt = generateFixPrompt(findings);
                     await vscode.env.clipboard.writeText(prompt);
-                    // Try to focus Codex terminal if it exists
-                    const terminals = vscode.window.terminals;
-                    const codexTerminal = terminals.find(t => 
-                        t.name.toLowerCase().includes('codex') || 
-                        t.name.toLowerCase().includes('openai')
-                    );
-                    if (codexTerminal) {
-                        codexTerminal.show();
+                    const pasted = tryPasteToTerminal(prompt, ['codex', 'openai']);
+                    if (pasted) {
                         void vscode.window.showInformationMessage(
-                            `ToneGuard: ${findingCount} fix instructions copied. Press Cmd+V in Codex terminal.`
+                            `ToneGuard: ${findingCount} fix instructions pasted into Codex terminal. Review and press Enter.`
                         );
                     } else {
                         void vscode.window.showInformationMessage(
@@ -4136,6 +5469,77 @@ export function activate(context: vscode.ExtensionContext): void {
                                 });
                         }
                     });
+            });
+        })
+    );
+
+    // Command to build a repo-wide blueprint graph (files + edges) via the CLI
+    context.subscriptions.push(
+        vscode.commands.registerCommand('dwg.flowBlueprint', async () => {
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (!workspaceFolders || workspaceFolders.length === 0) {
+                void vscode.window.showErrorMessage('ToneGuard: No workspace open.');
+                return;
+            }
+
+            // Pre-flight check
+            const binaryStatus = getBinaryStatus(context);
+            if (!binaryStatus.available) {
+                await showBinaryMissingError(binaryStatus);
+                return;
+            }
+
+            const workspaceRoot = workspaceFolders[0].uri.fsPath;
+            const reportsDir = path.join(workspaceRoot, 'reports');
+            if (!fs.existsSync(reportsDir)) {
+                fs.mkdirSync(reportsDir, { recursive: true });
+            }
+            const reportPath = path.join(reportsDir, 'flow-blueprint.json');
+
+            const args = [
+                'flow',
+                'blueprint',
+                '--config',
+                configPath,
+                '--format',
+                'json',
+                '--out',
+                reportPath,
+                workspaceRoot,
+            ];
+
+            outputChannel.show(true);
+            outputChannel.appendLine('ToneGuard: Building blueprint...');
+            outputChannel.appendLine(`ToneGuard: ${cliCommand} ${args.join(' ')}`);
+
+            execFile(cliCommand, args, { cwd: workspaceRoot }, (error, stdout, stderr) => {
+                if (stdout) {
+                    outputChannel.appendLine(stdout);
+                }
+                if (stderr) {
+                    outputChannel.appendLine(stderr);
+                }
+                if (error) {
+                    const err = error as NodeJS.ErrnoException;
+                    const message = err.message || String(err);
+                    outputChannel.appendLine(`ToneGuard: Blueprint failed: ${message}`);
+                    void vscode.window.showErrorMessage(
+                        'ToneGuard: Blueprint failed. See output for details.'
+                    );
+                    return;
+                }
+
+                outputChannel.appendLine(`ToneGuard: Blueprint saved to ${reportPath}`);
+                void vscode.window.showInformationMessage(
+                    'ToneGuard: Blueprint built.',
+                    'Open Report'
+                ).then((selection) => {
+                    if (selection === 'Open Report') {
+                        void vscode.workspace.openTextDocument(reportPath).then((doc) => {
+                            void vscode.window.showTextDocument(doc, { preview: false });
+                        });
+                    }
+                });
             });
         })
     );

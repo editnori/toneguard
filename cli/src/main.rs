@@ -11,8 +11,9 @@ use clap::{ArgAction, Parser, Subcommand};
 use console::style;
 use dwg_core::{
     arch::{FlowAuditConfig, FlowAuditReport, Language as FlowLanguage},
+    blueprint::{blueprint_paths, BlueprintConfig, BlueprintReport},
     flow::{FlowSpecIssue, IssueSeverity},
-    organize::{analyze_organization, generate_organize_prompt, OrganizeConfig, OrganizationReport},
+    organize::{analyze_organization, generate_organize_prompt, OrganizationReport},
     parse_category, Analyzer, Category, CommentPolicy, Config, DocumentReport,
 };
 use globset::{Glob, GlobSet, GlobSetBuilder};
@@ -157,8 +158,8 @@ struct OrganizeArgs {
     prompt_for: Option<String>,
 
     /// Minimum file size (KB) to flag as data file.
-    #[arg(long, default_value = "100")]
-    data_min_kb: u64,
+    #[arg(long)]
+    data_min_kb: Option<u64>,
 
     /// Skip git status checks.
     #[arg(long, action = ArgAction::SetTrue)]
@@ -183,6 +184,10 @@ enum FlowCommand {
     Propose(FlowProposeArgs),
     /// Create a new flow spec file (an artifact to review).
     New(FlowNewArgs),
+    /// Build a repo-wide blueprint graph (files + edges).
+    Blueprint(FlowBlueprintArgs),
+    /// Index functions and methods across the repo.
+    Index(FlowIndexArgs),
     /// Generate a control flow graph (CFG) for a function.
     Graph(FlowGraphArgs),
 }
@@ -316,6 +321,46 @@ struct FlowGraphArgs {
     /// Include logic detector findings in output.
     #[arg(long, action = ArgAction::SetTrue)]
     with_logic: bool,
+
+    /// Include Mermaid diagram text in JSON output (adds a `mermaid` field per CFG).
+    ///
+    /// Note: `--format mermaid` outputs Markdown (not JSON).
+    #[arg(long, action = ArgAction::SetTrue)]
+    include_mermaid: bool,
+}
+
+#[derive(Debug, Parser)]
+struct FlowIndexArgs {
+    /// Path to config file (YAML).
+    #[arg(long, default_value = "layth-style.yml")]
+    config: PathBuf,
+
+    /// Write JSON output to file.
+    #[arg(long)]
+    out: Option<PathBuf>,
+
+    /// Files or directories to scan.
+    #[arg(value_name = "PATH", default_value = ".", num_args = 0..)]
+    paths: Vec<PathBuf>,
+}
+
+#[derive(Debug, Parser)]
+struct FlowBlueprintArgs {
+    /// Path to config file (YAML).
+    #[arg(long, default_value = "layth-style.yml")]
+    config: PathBuf,
+
+    /// Output format: json, jsonl.
+    #[arg(long, default_value = "json")]
+    format: String,
+
+    /// Write output to file.
+    #[arg(long)]
+    out: Option<PathBuf>,
+
+    /// Files or directories to scan.
+    #[arg(value_name = "PATH", default_value = ".", num_args = 0..)]
+    paths: Vec<PathBuf>,
 }
 
 #[derive(Debug, Serialize)]
@@ -563,6 +608,51 @@ fn is_supported(path: &Path) -> bool {
         Some(ext) => matches!(
             ext.to_lowercase().as_str(),
             "md" | "markdown" | "mdx" | "txt" | "rst"
+        ),
+        None => false,
+    }
+}
+
+fn collect_code_files(paths: &[PathBuf], ignore: Option<&GlobSet>) -> anyhow::Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    for path in paths {
+        if path.is_dir() {
+            let mut walker = WalkDir::new(path).into_iter();
+            while let Some(entry_res) = walker.next() {
+                let entry = entry_res?;
+                let entry_path = entry.path();
+                if let Some(set) = ignore {
+                    if set.is_match(entry_path) {
+                        if entry.file_type().is_dir() {
+                            walker.skip_current_dir();
+                        }
+                        continue;
+                    }
+                }
+                if entry.file_type().is_dir() {
+                    continue;
+                }
+                if entry.file_type().is_file() && is_supported_code(entry_path) {
+                    files.push(entry_path.to_path_buf());
+                }
+            }
+        } else if path.is_file() && is_supported_code(path) {
+            if let Some(set) = ignore {
+                if set.is_match(path) {
+                    continue;
+                }
+            }
+            files.push(path.clone());
+        }
+    }
+    Ok(files)
+}
+
+fn is_supported_code(path: &Path) -> bool {
+    match path.extension().and_then(|s| s.to_str()) {
+        Some(ext) => matches!(
+            ext.to_lowercase().as_str(),
+            "rs" | "ts" | "tsx" | "js" | "jsx" | "py"
         ),
         None => false,
     }
@@ -1341,6 +1431,8 @@ fn run_flow(args: FlowArgs) -> anyhow::Result<()> {
         FlowCommand::Audit(audit_args) => run_flow_audit(audit_args),
         FlowCommand::Propose(propose_args) => run_flow_propose(propose_args),
         FlowCommand::New(new_args) => run_flow_new(new_args),
+        FlowCommand::Blueprint(blueprint_args) => run_flow_blueprint(blueprint_args),
+        FlowCommand::Index(index_args) => run_flow_index(index_args),
         FlowCommand::Graph(graph_args) => run_flow_graph(graph_args),
     }
 }
@@ -1515,6 +1607,49 @@ fn run_flow_new(args: FlowNewArgs) -> anyhow::Result<()> {
         "Wrote flow spec: {}",
         rel_path.to_string_lossy().replace('\\', "/")
     );
+    Ok(())
+}
+
+fn run_flow_blueprint(args: FlowBlueprintArgs) -> anyhow::Result<()> {
+    let (cfg, config_root) = load_config(&args.config)?;
+
+    let mut ignore_globs = cfg.repo_rules.ignore_globs.clone();
+    ignore_globs.extend(cfg.flow_rules.ignore_globs.clone());
+
+    let scan_paths = if args.paths.is_empty() {
+        vec![config_root.clone()]
+    } else {
+        args.paths.clone()
+    };
+
+    let blueprint_config = BlueprintConfig {
+        ignore_globs,
+        base_dir: Some(config_root),
+    };
+
+    let report = blueprint_paths(&scan_paths, &blueprint_config)?;
+
+    match args.format.as_str() {
+        "json" => {
+            if let Some(out) = &args.out {
+                write_json(out, &report)?;
+            } else {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            }
+        }
+        "jsonl" => {
+            let lines = blueprint_to_jsonl(&report)?;
+            if let Some(out) = &args.out {
+                write_text(out, &lines)?;
+            } else {
+                print!("{lines}");
+            }
+        }
+        other => {
+            return Err(anyhow!("Unsupported format: {other} (expected json or jsonl)"));
+        }
+    }
+
     Ok(())
 }
 
@@ -1727,7 +1862,11 @@ fn run_flow_graph(args: FlowGraphArgs) -> anyhow::Result<()> {
             edges: cfg.edges.len(),
             exits: cfg.exits.clone(),
             unreachable: cfg.unreachable_nodes().len(),
-            mermaid: if format == "mermaid" { Some(cfg.to_mermaid()) } else { None },
+            mermaid: if args.include_mermaid {
+                Some(cfg.to_mermaid())
+            } else {
+                None
+            },
         }
     }).collect();
 
@@ -1750,6 +1889,364 @@ fn run_flow_graph(args: FlowGraphArgs) -> anyhow::Result<()> {
         println!("Wrote CFG output to: {}", out.display());
     } else {
         println!("{}", output_str);
+    }
+
+    Ok(())
+}
+
+fn run_flow_index(args: FlowIndexArgs) -> anyhow::Result<()> {
+    use dwg_core::cfg::CfgLanguage;
+
+    #[derive(Debug, Serialize)]
+    struct FlowIndexItem {
+        display_name: String,
+        target_name: String,
+        file: String,
+        file_display: String,
+        start_line: u32,
+        language: CfgLanguage,
+        kind: String,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct FlowIndexOutput {
+        files_scanned: usize,
+        functions: usize,
+        by_language: BTreeMap<String, usize>,
+        items: Vec<FlowIndexItem>,
+    }
+
+    let (cfg, config_root) = load_config(&args.config)?;
+    let mut ignore_globs = cfg.repo_rules.ignore_globs.clone();
+    ignore_globs.extend(cfg.flow_rules.ignore_globs.clone());
+    let ignore_set = build_ignore_set(&ignore_globs)?;
+
+    let files = collect_code_files(&args.paths, ignore_set.as_ref())?;
+    let mut by_language: BTreeMap<String, usize> = BTreeMap::new();
+    let mut items: Vec<FlowIndexItem> = Vec::new();
+
+    for path in &files {
+        let rel = pathdiff::diff_paths(path, &config_root).unwrap_or_else(|| path.clone());
+        let file_display = rel.to_string_lossy().replace('\\', "/");
+        let file_abs = path.to_string_lossy().replace('\\', "/");
+        let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+
+        match ext {
+            "rs" => {
+                let before = items.len();
+                let text = fs::read_to_string(path)?;
+                let file = syn::parse_file(&text)
+                    .map_err(|e| anyhow!("Failed to parse Rust file: {}", e))?;
+
+                for item in &file.items {
+                    match item {
+                        syn::Item::Fn(item_fn) => {
+                            let name = item_fn.sig.ident.to_string();
+                            let start_line = item_fn.sig.ident.span().start().line as u32;
+                            items.push(FlowIndexItem {
+                                display_name: name.clone(),
+                                target_name: name,
+                                file: file_abs.clone(),
+                                file_display: file_display.clone(),
+                                start_line,
+                                language: CfgLanguage::Rust,
+                                kind: "function".to_string(),
+                            });
+                        }
+                        syn::Item::Impl(impl_block) => {
+                            let self_ty = match &*impl_block.self_ty {
+                                syn::Type::Path(tp) => tp
+                                    .path
+                                    .segments
+                                    .last()
+                                    .map(|s| s.ident.to_string())
+                                    .unwrap_or_else(|| "Unknown".into()),
+                                _ => "Unknown".into(),
+                            };
+                            for impl_item in &impl_block.items {
+                                if let syn::ImplItem::Fn(method) = impl_item {
+                                    let fn_name = method.sig.ident.to_string();
+                                    let display_name = format!("{}::{}", self_ty, fn_name);
+                                    let start_line = method.sig.ident.span().start().line as u32;
+                                    items.push(FlowIndexItem {
+                                        display_name,
+                                        target_name: format!("{}::{}", self_ty, fn_name),
+                                        file: file_abs.clone(),
+                                        file_display: file_display.clone(),
+                                        start_line,
+                                        language: CfgLanguage::Rust,
+                                        kind: "method".to_string(),
+                                    });
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let added = items.len().saturating_sub(before);
+                if added > 0 {
+                    *by_language.entry("rust".to_string()).or_insert(0) += added;
+                }
+            }
+            "ts" | "tsx" | "js" | "jsx" => {
+                let before = items.len();
+                let text = fs::read_to_string(path)?;
+                let source = text.as_bytes();
+                let is_ts = ext == "ts" || ext == "tsx";
+                let mut parser = tree_sitter::Parser::new();
+                let language = if is_ts {
+                    tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
+                } else {
+                    tree_sitter_javascript::LANGUAGE.into()
+                };
+                parser.set_language(&language)?;
+
+                let tree = parser
+                    .parse(&text, None)
+                    .ok_or_else(|| anyhow!("Failed to parse TypeScript/JavaScript file"))?;
+
+                fn node_text(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+                    node.utf8_text(source).ok().map(|s| s.to_string())
+                }
+
+                fn class_name(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+                    node.child_by_field_name("name")
+                        .and_then(|n| node_text(n, source))
+                }
+
+                fn visit_node(
+                    node: tree_sitter::Node,
+                    source: &[u8],
+                    file_abs: &str,
+                    file_display: &str,
+                    language: CfgLanguage,
+                    class_stack: &mut Vec<String>,
+                    items: &mut Vec<FlowIndexItem>,
+                ) {
+                    match node.kind() {
+                        "class_declaration" | "class" => {
+                            if let Some(name) = class_name(node, source) {
+                                class_stack.push(name);
+                                let mut cursor = node.walk();
+                                for child in node.children(&mut cursor) {
+                                    visit_node(child, source, file_abs, file_display, language, class_stack, items);
+                                }
+                                class_stack.pop();
+                            } else {
+                                let mut cursor = node.walk();
+                                for child in node.children(&mut cursor) {
+                                    visit_node(child, source, file_abs, file_display, language, class_stack, items);
+                                }
+                            }
+                        }
+                        "function_declaration" => {
+                            let name = node
+                                .child_by_field_name("name")
+                                .and_then(|n| node_text(n, source));
+                            if let Some(name) = name {
+                                let start_line = (node.start_position().row + 1) as u32;
+                                items.push(FlowIndexItem {
+                                    display_name: name.clone(),
+                                    target_name: name,
+                                    file: file_abs.to_string(),
+                                    file_display: file_display.to_string(),
+                                    start_line,
+                                    language,
+                                    kind: "function".to_string(),
+                                });
+                            }
+                        }
+                        "method_definition" => {
+                            let name = node
+                                .child_by_field_name("name")
+                                .and_then(|n| node_text(n, source));
+                            if let Some(name) = name {
+                                let start_line = (node.start_position().row + 1) as u32;
+                                let display_name = class_stack
+                                    .last()
+                                    .map(|c| format!("{}.{}", c, name))
+                                    .unwrap_or_else(|| name.clone());
+                                items.push(FlowIndexItem {
+                                    display_name,
+                                    target_name: name,
+                                    file: file_abs.to_string(),
+                                    file_display: file_display.to_string(),
+                                    start_line,
+                                    language,
+                                    kind: "method".to_string(),
+                                });
+                            }
+                        }
+                        "variable_declarator" => {
+                            let name_node = node.child_by_field_name("name");
+                            let value_node = node.child_by_field_name("value");
+                            if let (Some(name_node), Some(value_node)) = (name_node, value_node) {
+                                let is_fn = matches!(
+                                    value_node.kind(),
+                                    "function" | "arrow_function" | "generator_function"
+                                );
+                                if is_fn {
+                                    if let Some(name) = node_text(name_node, source) {
+                                        let start_line =
+                                            (value_node.start_position().row + 1) as u32;
+                                        items.push(FlowIndexItem {
+                                            display_name: name.clone(),
+                                            target_name: name,
+                                            file: file_abs.to_string(),
+                                            file_display: file_display.to_string(),
+                                            start_line,
+                                            language,
+                                            kind: "function".to_string(),
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        _ => {
+                            let mut cursor = node.walk();
+                            for child in node.children(&mut cursor) {
+                                visit_node(child, source, file_abs, file_display, language, class_stack, items);
+                            }
+                        }
+                    }
+                }
+
+                let lang = if is_ts { CfgLanguage::TypeScript } else { CfgLanguage::JavaScript };
+                let mut class_stack: Vec<String> = Vec::new();
+                visit_node(
+                    tree.root_node(),
+                    source,
+                    &file_abs,
+                    &file_display,
+                    lang,
+                    &mut class_stack,
+                    &mut items,
+                );
+                let key = if is_ts { "typescript" } else { "javascript" };
+                let added = items.len().saturating_sub(before);
+                if added > 0 {
+                    *by_language.entry(key.to_string()).or_insert(0) += added;
+                }
+            }
+            "py" => {
+                let before = items.len();
+                let text = fs::read_to_string(path)?;
+                let source = text.as_bytes();
+                let mut parser = tree_sitter::Parser::new();
+                let language = tree_sitter_python::LANGUAGE.into();
+                parser.set_language(&language)?;
+
+                let tree = parser
+                    .parse(&text, None)
+                    .ok_or_else(|| anyhow!("Failed to parse Python file"))?;
+
+                fn node_text(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+                    node.utf8_text(source).ok().map(|s| s.to_string())
+                }
+
+                fn visit_node(
+                    node: tree_sitter::Node,
+                    source: &[u8],
+                    file_abs: &str,
+                    file_display: &str,
+                    class_stack: &mut Vec<String>,
+                    items: &mut Vec<FlowIndexItem>,
+                ) {
+                    match node.kind() {
+                        "class_definition" => {
+                            if let Some(name_node) = node.child_by_field_name("name") {
+                                if let Some(name) = node_text(name_node, source) {
+                                    class_stack.push(name);
+                                    let mut cursor = node.walk();
+                                    for child in node.children(&mut cursor) {
+                                        visit_node(child, source, file_abs, file_display, class_stack, items);
+                                    }
+                                    class_stack.pop();
+                                    return;
+                                }
+                            }
+                            let mut cursor = node.walk();
+                            for child in node.children(&mut cursor) {
+                                visit_node(child, source, file_abs, file_display, class_stack, items);
+                            }
+                        }
+                        "function_definition" => {
+                            if let Some(name_node) = node.child_by_field_name("name") {
+                                if let Some(name) = node_text(name_node, source) {
+                                    let start_line = (node.start_position().row + 1) as u32;
+                                    let display_name = class_stack
+                                        .last()
+                                        .map(|c| format!("{}.{}", c, name))
+                                        .unwrap_or_else(|| name.clone());
+                                    items.push(FlowIndexItem {
+                                        display_name,
+                                        target_name: name,
+                                        file: file_abs.to_string(),
+                                        file_display: file_display.to_string(),
+                                        start_line,
+                                        language: CfgLanguage::Python,
+                                        kind: if class_stack.is_empty() {
+                                            "function".to_string()
+                                        } else {
+                                            "method".to_string()
+                                        },
+                                    });
+                                }
+                            }
+                        }
+                        _ => {
+                            let mut cursor = node.walk();
+                            for child in node.children(&mut cursor) {
+                                visit_node(child, source, file_abs, file_display, class_stack, items);
+                            }
+                        }
+                    }
+                }
+
+                let mut class_stack: Vec<String> = Vec::new();
+                visit_node(
+                    tree.root_node(),
+                    source,
+                    &file_abs,
+                    &file_display,
+                    &mut class_stack,
+                    &mut items,
+                );
+                let added = items.len().saturating_sub(before);
+                if added > 0 {
+                    *by_language.entry("python".to_string()).or_insert(0) += added;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    items.sort_by(|a, b| {
+        let file_cmp = a.file.cmp(&b.file);
+        if file_cmp != std::cmp::Ordering::Equal {
+            return file_cmp;
+        }
+        let line_cmp = a.start_line.cmp(&b.start_line);
+        if line_cmp != std::cmp::Ordering::Equal {
+            return line_cmp;
+        }
+        a.display_name.cmp(&b.display_name)
+    });
+
+    let output = FlowIndexOutput {
+        files_scanned: files.len(),
+        functions: items.len(),
+        by_language,
+        items,
+    };
+
+    let output_str = serde_json::to_string_pretty(&output)?;
+
+    if let Some(out) = &args.out {
+        fs::write(out, &output_str)?;
+        println!("Wrote flow index to: {}", out.display());
+    } else {
+        println!("{output_str}");
     }
 
     Ok(())
@@ -2001,6 +2498,88 @@ fn write_text(path: &Path, content: &str) -> anyhow::Result<()> {
     }
     fs::write(path, content)?;
     Ok(())
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+enum BlueprintJsonlRecord<'a> {
+    Node {
+        #[serde(flatten)]
+        node: &'a dwg_core::blueprint::BlueprintNode,
+    },
+    Edge {
+        #[serde(flatten)]
+        edge: &'a dwg_core::blueprint::BlueprintEdge,
+    },
+    Stats {
+        #[serde(flatten)]
+        stats: &'a dwg_core::blueprint::BlueprintStats,
+    },
+    Error {
+        #[serde(flatten)]
+        error: &'a dwg_core::blueprint::BlueprintError,
+    },
+    Orphan {
+        path: &'a str,
+        language: String,
+        lines: u32,
+        reason: &'static str,
+    },
+}
+
+fn blueprint_to_jsonl(report: &BlueprintReport) -> anyhow::Result<String> {
+    use std::collections::HashSet;
+    
+    let mut out = String::new();
+    
+    // Collect nodes with inbound edges
+    let mut has_inbound: HashSet<&str> = HashSet::new();
+    for edge in &report.edges {
+        if edge.resolved {
+            if let Some(ref to) = edge.to {
+                has_inbound.insert(to.as_str());
+            }
+        }
+    }
+    
+    // Output nodes
+    for node in &report.nodes {
+        out.push_str(&serde_json::to_string(&BlueprintJsonlRecord::Node { node })?);
+        out.push('\n');
+    }
+    
+    // Output edges
+    for edge in &report.edges {
+        out.push_str(&serde_json::to_string(&BlueprintJsonlRecord::Edge { edge })?);
+        out.push('\n');
+    }
+    
+    // Output orphans (files with no inbound edges - potential dead code or entry points)
+    for node in &report.nodes {
+        if !has_inbound.contains(node.path.as_str()) {
+            out.push_str(&serde_json::to_string(&BlueprintJsonlRecord::Orphan {
+                path: &node.path,
+                language: serde_json::to_string(&node.language).unwrap_or_default().trim_matches('"').to_string(),
+                lines: node.lines,
+                reason: "no_inbound_edges",
+            })?);
+            out.push('\n');
+        }
+    }
+    
+    // Output stats
+    out.push_str(&serde_json::to_string(&BlueprintJsonlRecord::Stats {
+        stats: &report.stats,
+    })?);
+    out.push('\n');
+    
+    // Output errors
+    for error in &report.errors {
+        out.push_str(&serde_json::to_string(&BlueprintJsonlRecord::Error { error })?);
+        out.push('\n');
+    }
+    
+    Ok(out)
 }
 
 fn slugify_kebab(input: &str) -> String {
@@ -2456,9 +3035,22 @@ fn run_organize(args: OrganizeArgs) -> anyhow::Result<()> {
 
     let root = fs::canonicalize(&root).unwrap_or(root);
 
-    // Build config
-    let mut config = OrganizeConfig::default();
-    config.data_file_min_size = args.data_min_kb * 1024;
+    // Build config (merge organize + repo ignore rules)
+    let (cfg, _config_root) = load_config(&args.config)?;
+    let mut config = cfg.organize_rules;
+    if !cfg.repo_rules.ignore_globs.is_empty() {
+        let mut merged = config.ignore_globs.clone();
+        merged.extend(cfg.repo_rules.ignore_globs);
+        merged.sort();
+        merged.dedup();
+        config.ignore_globs = merged;
+    }
+    if let Some(kb) = config.data_file_min_kb {
+        config.data_file_min_size = kb * 1024;
+    }
+    if let Some(kb) = args.data_min_kb {
+        config.data_file_min_size = kb * 1024;
+    }
     config.check_git_status = !args.no_git;
 
     // Run analysis

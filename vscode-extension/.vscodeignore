@@ -1,5 +1,6 @@
 # Source files (only need compiled output)
 src/**
+webview/**
 *.ts
 tsconfig.json
 
@@ -39,6 +40,7 @@ icon-minimal.svg
 # Keep these (don't ignore):
 # - out/** (compiled extension)
 # - bin/** (bundled binaries)
+# - media/** (bundled webviews)
 # - config/** (default config)
 # - icon.png
 # - README.md
