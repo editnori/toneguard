@@ -236,6 +236,13 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                     organize: path.join(root, 'reports', 'organization-report.json'),
                     flowIndex: path.join(root, 'reports', 'flow-index.json'),
                     blueprint: path.join(root, 'reports', 'flow-blueprint.json'),
+                    callgraph: path.join(root, 'reports', 'flow-callgraph.json'),
+                    blueprintDiff: path.join(root, 'reports', 'flow-blueprint-diff.json'),
+                    blueprintMapping: path.join(
+                        root,
+                        'reports',
+                        'flow-blueprint-mapping.yml'
+                    ),
                 };
 
                 const safeReadJson = (filePath: string): any | null => {
@@ -249,11 +256,29 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                     }
                 };
 
+                const safeReadText = (filePath: string, maxChars: number): string | null => {
+                    try {
+                        if (!fs.existsSync(filePath)) {
+                            return null;
+                        }
+                        const text = fs.readFileSync(filePath, 'utf8');
+                        if (text.length <= maxChars) {
+                            return text;
+                        }
+                        return text.slice(0, maxChars) + '\n…(truncated)…\n';
+                    } catch {
+                        return null;
+                    }
+                };
+
                 const markdown = safeReadJson(reportPaths.markdown);
                 const flow = safeReadJson(reportPaths.flow);
                 const organize = safeReadJson(reportPaths.organize);
                 const flowIndex = safeReadJson(reportPaths.flowIndex);
                 const blueprint = safeReadJson(reportPaths.blueprint);
+                const callgraph = safeReadJson(reportPaths.callgraph);
+                const blueprintDiff = safeReadJson(reportPaths.blueprintDiff);
+                const blueprintMapping = safeReadText(reportPaths.blueprintMapping, 4000);
 
                 const markdownRepoIssues = Array.isArray(markdown?.repo_issues)
                     ? markdown.repo_issues
@@ -382,6 +407,70 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                           }
                         : null;
 
+                const callgraphSummary =
+                    callgraph && typeof callgraph === 'object'
+                        ? {
+                              nodes:
+                                  typeof callgraph?.stats?.nodes === 'number'
+                                      ? callgraph.stats.nodes
+                                      : Array.isArray(callgraph?.nodes)
+                                        ? callgraph.nodes.length
+                                        : undefined,
+                              edges:
+                                  typeof callgraph?.stats?.edges === 'number'
+                                      ? callgraph.stats.edges
+                                      : Array.isArray(callgraph?.edges)
+                                        ? callgraph.edges.length
+                                        : undefined,
+                              edges_resolved:
+                                  typeof callgraph?.stats?.edges_resolved === 'number'
+                                      ? callgraph.stats.edges_resolved
+                                      : undefined,
+                              sample_nodes: Array.isArray(callgraph?.nodes)
+                                  ? callgraph.nodes.slice(0, 30).map((n: any) => ({
+                                        id: String(n?.id ?? ''),
+                                        name: String(n?.display_name ?? ''),
+                                        file: normalizeReportedPath(
+                                            String(n?.file_display ?? n?.file ?? '')
+                                        ),
+                                        line:
+                                            typeof n?.start_line === 'number'
+                                                ? n.start_line
+                                                : undefined,
+                                        kind: String(n?.kind ?? ''),
+                                    }))
+                                  : undefined,
+                              sample_edges: Array.isArray(callgraph?.edges)
+                                  ? callgraph.edges.slice(0, 40).map((e: any) => ({
+                                        from: String(e?.from ?? ''),
+                                        to: e?.to ? String(e.to) : null,
+                                        to_raw: String(e?.to_raw ?? ''),
+                                        line: typeof e?.line === 'number' ? e.line : undefined,
+                                        resolved: Boolean(e?.resolved),
+                                    }))
+                                  : undefined,
+                          }
+                        : null;
+
+                const blueprintDiffSummary =
+                    blueprintDiff && typeof blueprintDiff === 'object'
+                        ? {
+                              nodes_added: Array.isArray(blueprintDiff?.nodes_added)
+                                  ? blueprintDiff.nodes_added.slice(0, 20)
+                                  : undefined,
+                              nodes_removed: Array.isArray(blueprintDiff?.nodes_removed)
+                                  ? blueprintDiff.nodes_removed.slice(0, 20)
+                                  : undefined,
+                              removed_count: Array.isArray(blueprintDiff?.nodes_removed)
+                                  ? blueprintDiff.nodes_removed.length
+                                  : undefined,
+                              added_count: Array.isArray(blueprintDiff?.nodes_added)
+                                  ? blueprintDiff.nodes_added.length
+                                  : undefined,
+                              mapping_check: blueprintDiff?.mapping_check ?? undefined,
+                          }
+                        : null;
+
                 const bundle = {
                     kind: 'toneguard-review-bundle',
                     generated_at: new Date().toISOString(),
@@ -406,6 +495,15 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                             : null,
                         blueprint: fs.existsSync(reportPaths.blueprint)
                             ? 'reports/flow-blueprint.json'
+                            : null,
+                        callgraph: fs.existsSync(reportPaths.callgraph)
+                            ? 'reports/flow-callgraph.json'
+                            : null,
+                        blueprint_diff: fs.existsSync(reportPaths.blueprintDiff)
+                            ? 'reports/flow-blueprint-diff.json'
+                            : null,
+                        blueprint_mapping: fs.existsSync(reportPaths.blueprintMapping)
+                            ? 'reports/flow-blueprint-mapping.yml'
                             : null,
                     },
                     markdown: {
@@ -451,6 +549,9 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                     },
                     flow_index: flowIndexSummary,
                     blueprint: blueprintSummary,
+                    callgraph: callgraphSummary,
+                    blueprint_diff: blueprintDiffSummary,
+                    blueprint_mapping: blueprintMapping,
                     organize: organizeSummary,
                     task: {
                         goal: 'Review these findings and propose concrete patches.',
@@ -580,6 +681,38 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                 if (!fs.existsSync(reportPath)) {
                     void vscode.window.showErrorMessage(
                         'ToneGuard: reports/flow-blueprint.json not found. Run recommended review.'
+                    );
+                    return;
+                }
+                const doc = await vscode.workspace.openTextDocument(reportPath);
+                await vscode.window.showTextDocument(doc, { preview: false });
+                return;
+            }
+            case 'openBlueprintDiffReport': {
+                const root = getWorkspaceRoot();
+                if (!root) {
+                    return;
+                }
+                const reportPath = path.join(root, 'reports', 'flow-blueprint-diff.json');
+                if (!fs.existsSync(reportPath)) {
+                    void vscode.window.showErrorMessage(
+                        'ToneGuard: reports/flow-blueprint-diff.json not found. Run recommended review.'
+                    );
+                    return;
+                }
+                const doc = await vscode.workspace.openTextDocument(reportPath);
+                await vscode.window.showTextDocument(doc, { preview: false });
+                return;
+            }
+            case 'openBlueprintMapping': {
+                const root = getWorkspaceRoot();
+                if (!root) {
+                    return;
+                }
+                const reportPath = path.join(root, 'reports', 'flow-blueprint-mapping.yml');
+                if (!fs.existsSync(reportPath)) {
+                    void vscode.window.showErrorMessage(
+                        'ToneGuard: reports/flow-blueprint-mapping.yml not found. Run recommended review.'
                     );
                     return;
                 }
@@ -1269,46 +1402,6 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                     'ToneGuard: Organize is not available in this CLI. Update the extension binaries.'
                 );
                 return;
-            }
-            if (stderr.includes('--data-min-kb')) {
-                const fallbackArgs = args.filter(
-                    (arg) => arg !== '--data-min-kb' && arg !== String(dataMinKb)
-                );
-                this.outputChannel.appendLine(
-                    'ToneGuard: Retrying organize without --data-min-kb (older CLI detected).'
-                );
-                try {
-                    await runArgs(fallbackArgs);
-                    if (fs.existsSync(outFile)) {
-                        const report = JSON.parse(fs.readFileSync(outFile, 'utf-8'));
-                        const findings = report.findings || [];
-                        const repoType = report.repo_type || {};
-                        if (this.view) {
-                            this.view.webview.postMessage({
-                                type: 'organizeResult',
-                                repoType: repoType.kind || 'Mixed',
-                                confidence: ((repoType.confidence || 0) * 100).toFixed(0) + '%',
-                                issueCount: findings.length,
-                                findings: findings.slice(0, 20).map((f: any) => ({
-                                    path: f.path,
-                                    issue: f.issue,
-                                    action: f.suggested_action,
-                                    reason: f.reason,
-                                    target: f.target_path,
-                                })),
-                            });
-                        }
-                        void vscode.window.showInformationMessage(
-                            `ToneGuard: Found ${findings.length} organization issue(s).`
-                        );
-                        return;
-                    }
-                } catch (retryError) {
-                    const retryErr = retryError as { err?: NodeJS.ErrnoException };
-                    this.outputChannel.appendLine(
-                        `ToneGuard: Organization analysis failed after retry: ${retryErr?.err?.message ?? 'unknown error'}`
-                    );
-                }
             }
             const err = failure?.err;
             this.outputChannel.appendLine(
@@ -3958,6 +4051,10 @@ class FlowMapPanel {
                         await this.blueprintWorkspace();
                         break;
 
+                    case 'callgraphWorkspace':
+                        await this.callgraphWorkspace();
+                        break;
+
                     case 'setTheme': {
                         const value = typeof message.value === 'string' ? message.value : 'vscode';
                         const config = vscode.workspace.getConfiguration('dwg');
@@ -4186,6 +4283,72 @@ class FlowMapPanel {
                     err.message.includes('blueprint')
                         ? `Flow blueprint failed: ${err.message}`
                         : 'Flow blueprint failed. Update the bundled CLI and try again.',
+            });
+        }
+    }
+
+    private async callgraphWorkspace(): Promise<void> {
+        const workspaceRoot = getWorkspaceRoot();
+        if (!workspaceRoot) {
+            void vscode.window.showErrorMessage('ToneGuard: No workspace open.');
+            return;
+        }
+
+        const reportsDir = path.join(workspaceRoot, 'reports');
+        if (!fs.existsSync(reportsDir)) {
+            fs.mkdirSync(reportsDir, { recursive: true });
+        }
+        const outFile = path.join(reportsDir, 'flow-callgraph.json');
+
+        const args = [
+            'flow',
+            'callgraph',
+            '--config',
+            this.configPath,
+            '--format',
+            'json',
+            '--resolved-only',
+            '--out',
+            outFile,
+            workspaceRoot,
+        ];
+
+        this.outputChannel.show(true);
+        this.outputChannel.appendLine(`ToneGuard: Running ${this.cliPath} ${args.join(' ')}`);
+
+        try {
+            await new Promise<void>((resolve, reject) => {
+                execFile(
+                    this.cliPath,
+                    args,
+                    { cwd: workspaceRoot, maxBuffer: 20 * 1024 * 1024 },
+                    (error, stdout, stderr) => {
+                        if (stdout) {
+                            this.outputChannel.appendLine(String(stdout));
+                        }
+                        if (stderr) {
+                            this.outputChannel.appendLine(String(stderr));
+                        }
+                        if (error) {
+                            reject(error);
+                            return;
+                        }
+                        resolve();
+                    }
+                );
+            });
+
+            const report = JSON.parse(fs.readFileSync(outFile, 'utf-8'));
+            void this.panel.webview.postMessage({ type: 'callgraphData', data: report });
+        } catch (error) {
+            const err = error as NodeJS.ErrnoException;
+            this.outputChannel.appendLine(`ToneGuard: Flow call graph failed: ${err.message}`);
+            void this.panel.webview.postMessage({
+                type: 'error',
+                message:
+                    err.message.includes('callgraph')
+                        ? `Flow call graph failed: ${err.message}`
+                        : 'Flow call graph failed. Update the bundled CLI and try again.',
             });
         }
     }
@@ -5065,6 +5228,16 @@ export function activate(context: vscode.ExtensionContext): void {
             const markdownLintPath = path.join(reportsDir, 'markdown-lint.json');
             const flowIndexPath = path.join(reportsDir, 'flow-index.json');
             const blueprintPath = path.join(reportsDir, 'flow-blueprint.json');
+            const callgraphPath = path.join(reportsDir, 'flow-callgraph.json');
+            const blueprintBeforePath = path.join(reportsDir, 'flow-blueprint.before.json');
+            const blueprintDiffPath = path.join(
+                reportsDir,
+                'flow-blueprint-diff.json'
+            );
+            const blueprintMappingPath = path.join(
+                reportsDir,
+                'flow-blueprint-mapping.yml'
+            );
             async function runMarkdownScan(root: string): Promise<number | null> {
                 const resolvedConfigPath = configPath || 'layth-style.yml';
                 const args = ['--config', resolvedConfigPath, '--json'];
@@ -5209,6 +5382,14 @@ export function activate(context: vscode.ExtensionContext): void {
 
                         // Step 5: Build blueprint graph (files + edges)
                         progress.report({ message: 'Building blueprint…' });
+                        const hasPriorBlueprint = fs.existsSync(blueprintPath);
+                        if (hasPriorBlueprint) {
+                            try {
+                                fs.copyFileSync(blueprintPath, blueprintBeforePath);
+                            } catch {
+                                // ignore snapshot errors
+                            }
+                        }
                         try {
                             await runCli(
                                 [
@@ -5227,6 +5408,59 @@ export function activate(context: vscode.ExtensionContext): void {
                         } catch {
                             outputChannel.appendLine(
                                 'ToneGuard: Flow blueprint failed (optional step).'
+                            );
+                        }
+
+                        // Step 6: Blueprint diff (refactor guard)
+                        if (hasPriorBlueprint && fs.existsSync(blueprintBeforePath) && fs.existsSync(blueprintPath)) {
+                            progress.report({ message: 'Building blueprint diff…' });
+                            try {
+                                await runCli(
+                                    [
+                                        'flow',
+                                        'blueprint',
+                                        'diff',
+                                        '--before',
+                                        blueprintBeforePath,
+                                        '--after',
+                                        blueprintPath,
+                                        '--out',
+                                        blueprintDiffPath,
+                                        '--write-mapping',
+                                        blueprintMappingPath,
+                                    ],
+                                    'Building blueprint diff…'
+                                );
+                            } catch {
+                                outputChannel.appendLine(
+                                    'ToneGuard: Flow blueprint diff failed (optional step).'
+                                );
+                            }
+                        }
+
+                        // Step 7: Build call graph (functions)
+                        progress.report({ message: 'Building call graph…' });
+                        try {
+                            await runCli(
+                                [
+                                    'flow',
+                                    'callgraph',
+                                    '--config',
+                                    configPath,
+                                    '--format',
+                                    'json',
+                                    '--max-calls-per-fn',
+                                    '80',
+                                    '--resolved-only',
+                                    '--out',
+                                    callgraphPath,
+                                    workspaceRoot,
+                                ],
+                                'Building call graph…'
+                            );
+                        } catch {
+                            outputChannel.appendLine(
+                                'ToneGuard: Flow call graph failed (optional step).'
                             );
                         }
                     }

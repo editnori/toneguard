@@ -24,6 +24,9 @@ The recommended review writes files under `reports/`:
 - `reports/flow-proposal.md`
 - `reports/flow-index.json` (best-effort)
 - `reports/flow-blueprint.json` (best-effort)
+- `reports/flow-callgraph.json` (best-effort)
+- `reports/flow-blueprint-diff.json` (best-effort)
+- `reports/flow-blueprint-mapping.yml` (best-effort)
 
 ## Configuration
 

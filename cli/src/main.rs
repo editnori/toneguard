@@ -188,6 +188,8 @@ enum FlowCommand {
     Blueprint(FlowBlueprintArgs),
     /// Index functions and methods across the repo.
     Index(FlowIndexArgs),
+    /// Build a cross-file call graph for functions and methods.
+    Callgraph(FlowCallgraphArgs),
     /// Generate a control flow graph (CFG) for a function.
     Graph(FlowGraphArgs),
 }
@@ -338,6 +340,33 @@ struct FlowIndexArgs {
     /// Write JSON output to file.
     #[arg(long)]
     out: Option<PathBuf>,
+
+    /// Files or directories to scan.
+    #[arg(value_name = "PATH", default_value = ".", num_args = 0..)]
+    paths: Vec<PathBuf>,
+}
+
+#[derive(Debug, Parser)]
+struct FlowCallgraphArgs {
+    /// Path to config file (YAML).
+    #[arg(long, default_value = "layth-style.yml")]
+    config: PathBuf,
+
+    /// Output format: json, jsonl.
+    #[arg(long, default_value = "json")]
+    format: String,
+
+    /// Write output to file.
+    #[arg(long)]
+    out: Option<PathBuf>,
+
+    /// Maximum calls captured per function body.
+    #[arg(long, default_value = "200")]
+    max_calls_per_fn: usize,
+
+    /// Emit only resolved call edges (drops unresolved calls).
+    #[arg(long, action = ArgAction::SetTrue)]
+    resolved_only: bool,
 
     /// Files or directories to scan.
     #[arg(value_name = "PATH", default_value = ".", num_args = 0..)]
@@ -1484,6 +1513,7 @@ fn run_flow(args: FlowArgs) -> anyhow::Result<()> {
         FlowCommand::New(new_args) => run_flow_new(new_args),
         FlowCommand::Blueprint(blueprint_args) => run_flow_blueprint(blueprint_args),
         FlowCommand::Index(index_args) => run_flow_index(index_args),
+        FlowCommand::Callgraph(callgraph_args) => run_flow_callgraph(callgraph_args),
         FlowCommand::Graph(graph_args) => run_flow_graph(graph_args),
     }
 }
@@ -2818,6 +2848,409 @@ fn run_flow_index(args: FlowIndexArgs) -> anyhow::Result<()> {
     if let Some(out) = &args.out {
         fs::write(out, &output_str)?;
         println!("Wrote flow index to: {}", out.display());
+    } else {
+        println!("{output_str}");
+    }
+
+    Ok(())
+}
+
+fn run_flow_callgraph(args: FlowCallgraphArgs) -> anyhow::Result<()> {
+    use std::collections::HashMap;
+    use syn::spanned::Spanned;
+    use syn::visit::Visit;
+
+    #[derive(Debug, Serialize)]
+    struct CallgraphNode {
+        id: String,
+        display_name: String,
+        target_name: String,
+        file: String,
+        file_display: String,
+        start_line: u32,
+        kind: String,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct CallgraphEdge {
+        from: String,
+        to: Option<String>,
+        to_raw: String,
+        kind: String,
+        line: Option<u32>,
+        resolved: bool,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct CallgraphStats {
+        files_scanned: usize,
+        nodes: usize,
+        edges: usize,
+        edges_resolved: usize,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct CallgraphError {
+        path: String,
+        message: String,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct CallgraphOutput {
+        nodes: Vec<CallgraphNode>,
+        edges: Vec<CallgraphEdge>,
+        stats: CallgraphStats,
+        errors: Vec<CallgraphError>,
+    }
+
+    fn normalize_path_display(path: &Path) -> String {
+        path.to_string_lossy().replace('\\', "/")
+    }
+
+    fn rust_path_text(path: &syn::Path) -> String {
+        path.segments
+            .iter()
+            .map(|s| s.ident.to_string())
+            .collect::<Vec<_>>()
+            .join("::")
+    }
+
+    fn rust_callee_text(expr: &syn::Expr) -> Option<String> {
+        match expr {
+            syn::Expr::Path(p) => Some(rust_path_text(&p.path)),
+            syn::Expr::Paren(p) => rust_callee_text(&p.expr),
+            syn::Expr::Group(g) => rust_callee_text(&g.expr),
+            syn::Expr::Reference(r) => rust_callee_text(&r.expr),
+            syn::Expr::Unary(u) => rust_callee_text(&u.expr),
+            _ => None,
+        }
+    }
+
+    fn resolve_callee(
+        file_display: &str,
+        raw: &str,
+        by_file_target: &HashMap<(String, String), Vec<String>>,
+        by_target: &HashMap<String, Vec<String>>,
+    ) -> Option<String> {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return None;
+        }
+
+        let mut candidates: Vec<String> = Vec::new();
+        candidates.push(raw.to_string());
+
+        if raw.contains("::") {
+            let parts: Vec<&str> = raw.split("::").filter(|s| !s.is_empty()).collect();
+            if parts.len() >= 2 {
+                candidates.push(format!("{}::{}", parts[parts.len() - 2], parts[parts.len() - 1]));
+            }
+            if let Some(last) = parts.last() {
+                candidates.push((*last).to_string());
+            }
+        } else {
+            candidates.push(raw.to_string());
+        }
+
+        for cand in candidates {
+            let key = (file_display.to_string(), cand.clone());
+            if let Some(ids) = by_file_target.get(&key) {
+                if ids.len() == 1 {
+                    return Some(ids[0].clone());
+                }
+            }
+            if let Some(ids) = by_target.get(&cand) {
+                if ids.len() == 1 {
+                    return Some(ids[0].clone());
+                }
+            }
+        }
+
+        None
+    }
+
+    // Load config and collect Rust files (call graph is Rust-only for now).
+    let (cfg, config_root) = load_config(&args.config)?;
+    let mut ignore_globs = cfg.repo_rules.ignore_globs.clone();
+    ignore_globs.extend(cfg.flow_rules.ignore_globs.clone());
+    let ignore_set = build_ignore_set(&ignore_globs)?;
+
+    let code_files = collect_code_files(&args.paths, ignore_set.as_ref())?;
+    let files: Vec<PathBuf> = code_files
+        .into_iter()
+        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("rs"))
+        .collect();
+
+    // Parse files and index functions/methods.
+    struct ParsedRustFile {
+        file_display: String,
+        file_abs: String,
+        ast: syn::File,
+    }
+
+    let mut parsed: Vec<ParsedRustFile> = Vec::new();
+    let mut errors: Vec<CallgraphError> = Vec::new();
+
+    for path in &files {
+        let rel = pathdiff::diff_paths(path, &config_root).unwrap_or_else(|| path.clone());
+        let file_display = normalize_path_display(&rel);
+        let file_abs = normalize_path_display(path);
+        let text = match fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(e) => {
+                errors.push(CallgraphError {
+                    path: file_display.clone(),
+                    message: format!("Failed to read: {e}"),
+                });
+                continue;
+            }
+        };
+        match syn::parse_file(&text) {
+            Ok(ast) => parsed.push(ParsedRustFile {
+                file_display,
+                file_abs,
+                ast,
+            }),
+            Err(e) => {
+                errors.push(CallgraphError {
+                    path: file_display.clone(),
+                    message: format!("Failed to parse Rust file: {e}"),
+                });
+            }
+        }
+    }
+
+    let mut nodes: Vec<CallgraphNode> = Vec::new();
+    let mut by_file_target: HashMap<(String, String), Vec<String>> = HashMap::new();
+    let mut by_target: HashMap<String, Vec<String>> = HashMap::new();
+
+    for file in &parsed {
+        for item in &file.ast.items {
+            match item {
+                syn::Item::Fn(item_fn) => {
+                    let name = item_fn.sig.ident.to_string();
+                    let start_line = item_fn.sig.ident.span().start().line as u32;
+                    let id = format!("{}::{}", file.file_display, name);
+                    nodes.push(CallgraphNode {
+                        id: id.clone(),
+                        display_name: name.clone(),
+                        target_name: name.clone(),
+                        file: file.file_abs.clone(),
+                        file_display: file.file_display.clone(),
+                        start_line,
+                        kind: "function".to_string(),
+                    });
+                    by_file_target
+                        .entry((file.file_display.clone(), name.clone()))
+                        .or_default()
+                        .push(id.clone());
+                    by_target.entry(name).or_default().push(id);
+                }
+                syn::Item::Impl(impl_block) => {
+                    let self_ty = match &*impl_block.self_ty {
+                        syn::Type::Path(tp) => tp
+                            .path
+                            .segments
+                            .last()
+                            .map(|s| s.ident.to_string())
+                            .unwrap_or_else(|| "Unknown".into()),
+                        _ => "Unknown".into(),
+                    };
+                    for impl_item in &impl_block.items {
+                        if let syn::ImplItem::Fn(method) = impl_item {
+                            let fn_name = method.sig.ident.to_string();
+                            let display_name = format!("{self_ty}::{fn_name}");
+                            let start_line = method.sig.ident.span().start().line as u32;
+                            let id = format!("{}::{}", file.file_display, display_name);
+                            nodes.push(CallgraphNode {
+                                id: id.clone(),
+                                display_name: display_name.clone(),
+                                target_name: display_name.clone(),
+                                file: file.file_abs.clone(),
+                                file_display: file.file_display.clone(),
+                                start_line,
+                                kind: "method".to_string(),
+                            });
+                            by_file_target
+                                .entry((file.file_display.clone(), display_name.clone()))
+                                .or_default()
+                                .push(id.clone());
+                            by_target.entry(display_name).or_default().push(id);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Collect call edges.
+    let mut edges: Vec<CallgraphEdge> = Vec::new();
+    let mut edges_resolved = 0usize;
+
+    struct CallVisitor {
+        calls: Vec<(String, u32)>,
+        max: usize,
+    }
+
+    impl<'ast> syn::visit::Visit<'ast> for CallVisitor {
+        fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
+            if self.calls.len() < self.max {
+                if let Some(raw) = rust_callee_text(&node.func) {
+                    let line = node.span().start().line as u32;
+                    self.calls.push((raw, line));
+                }
+            }
+            syn::visit::visit_expr_call(self, node);
+        }
+
+        fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
+            if self.calls.len() < self.max {
+                let raw = node.method.to_string();
+                let line = node.span().start().line as u32;
+                self.calls.push((raw, line));
+            }
+            syn::visit::visit_expr_method_call(self, node);
+        }
+    }
+
+    for file in &parsed {
+        for item in &file.ast.items {
+            match item {
+                syn::Item::Fn(item_fn) => {
+                    let name = item_fn.sig.ident.to_string();
+                    let caller_id = format!("{}::{}", file.file_display, name);
+                    let mut visitor = CallVisitor {
+                        calls: Vec::new(),
+                        max: args.max_calls_per_fn,
+                    };
+                    visitor.visit_block(&item_fn.block);
+                    for (raw, line) in visitor.calls {
+                        let to = resolve_callee(
+                            &file.file_display,
+                            &raw,
+                            &by_file_target,
+                            &by_target,
+                        );
+                        let resolved = to.is_some();
+                        if resolved {
+                            edges_resolved += 1;
+                        } else if args.resolved_only {
+                            continue;
+                        }
+                        edges.push(CallgraphEdge {
+                            from: caller_id.clone(),
+                            to,
+                            to_raw: raw,
+                            kind: "call".to_string(),
+                            line: Some(line),
+                            resolved,
+                        });
+                    }
+                }
+                syn::Item::Impl(impl_block) => {
+                    let self_ty = match &*impl_block.self_ty {
+                        syn::Type::Path(tp) => tp
+                            .path
+                            .segments
+                            .last()
+                            .map(|s| s.ident.to_string())
+                            .unwrap_or_else(|| "Unknown".into()),
+                        _ => "Unknown".into(),
+                    };
+                    for impl_item in &impl_block.items {
+                        if let syn::ImplItem::Fn(method) = impl_item {
+                            let fn_name = method.sig.ident.to_string();
+                            let display_name = format!("{self_ty}::{fn_name}");
+                            let caller_id =
+                                format!("{}::{}", file.file_display, display_name);
+                            let mut visitor = CallVisitor {
+                                calls: Vec::new(),
+                                max: args.max_calls_per_fn,
+                            };
+                            visitor.visit_block(&method.block);
+                            for (raw, line) in visitor.calls {
+                                let to = resolve_callee(
+                                    &file.file_display,
+                                    &raw,
+                                    &by_file_target,
+                                    &by_target,
+                                );
+                                let resolved = to.is_some();
+                                if resolved {
+                                    edges_resolved += 1;
+                                } else if args.resolved_only {
+                                    continue;
+                                }
+                                edges.push(CallgraphEdge {
+                                    from: caller_id.clone(),
+                                    to,
+                                    to_raw: raw,
+                                    kind: "call".to_string(),
+                                    line: Some(line),
+                                    resolved,
+                                });
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let node_count = nodes.len();
+    let edge_count = edges.len();
+
+    let output = CallgraphOutput {
+        nodes,
+        edges,
+        stats: CallgraphStats {
+            files_scanned: parsed.len(),
+            nodes: node_count,
+            edges: edge_count,
+            edges_resolved,
+        },
+        errors,
+    };
+
+    let format = args.format.to_lowercase();
+    let output_str = if format == "jsonl" {
+        let mut out = String::new();
+        out.push_str(&serde_json::to_string(&serde_json::json!({
+            "type": "stats",
+            "stats": &output.stats,
+        }))?);
+        out.push('\n');
+        for node in &output.nodes {
+            out.push_str(&serde_json::to_string(&serde_json::json!({
+                "type": "node",
+                "node": node,
+            }))?);
+            out.push('\n');
+        }
+        for edge in &output.edges {
+            out.push_str(&serde_json::to_string(&serde_json::json!({
+                "type": "edge",
+                "edge": edge,
+            }))?);
+            out.push('\n');
+        }
+        for err in &output.errors {
+            out.push_str(&serde_json::to_string(&serde_json::json!({
+                "type": "error",
+                "error": err,
+            }))?);
+            out.push('\n');
+        }
+        out
+    } else {
+        serde_json::to_string_pretty(&output)?
+    };
+
+    if let Some(out) = &args.out {
+        fs::write(out, &output_str)?;
+        println!("Wrote flow call graph to: {}", out.display());
     } else {
         println!("{output_str}");
     }

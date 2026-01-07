@@ -50,6 +50,7 @@ dwg-cli flow audit --config layth-style.yml --out reports/flow-audit.json .
 dwg-cli flow propose --config layth-style.yml --out reports/flow-proposal.md .
 dwg-cli flow blueprint --config layth-style.yml --out reports/flow-blueprint.json .
 dwg-cli flow index --config layth-style.yml --out reports/flow-index.json .
+dwg-cli flow callgraph --config layth-style.yml --out reports/flow-callgraph.json .
 ```
 
 To generate a CFG (JSON + optional Mermaid), run:

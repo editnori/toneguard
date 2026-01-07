@@ -55,6 +55,37 @@ type BlueprintReport = {
     errors: { path: string; message: string }[];
 };
 
+type CallgraphNode = {
+    id: string;
+    display_name: string;
+    target_name: string;
+    file: string;
+    file_display: string;
+    start_line: number;
+    kind: string;
+};
+
+type CallgraphEdge = {
+    from: string;
+    to?: string | null;
+    to_raw: string;
+    kind: string;
+    line?: number | null;
+    resolved: boolean;
+};
+
+type CallgraphReport = {
+    nodes: CallgraphNode[];
+    edges: CallgraphEdge[];
+    stats: {
+        files_scanned: number;
+        nodes: number;
+        edges: number;
+        edges_resolved: number;
+    };
+    errors: { path: string; message: string }[];
+};
+
 type CfgItem = {
     name: string;
     file: string;
@@ -72,7 +103,7 @@ type GraphData = {
 type UiState = {
     theme: UiTheme;
     search: string;
-    mode: 'functions' | 'blueprint';
+    mode: 'functions' | 'calls' | 'blueprint';
 };
 
 const vscode = getVsCodeApi();
@@ -311,6 +342,44 @@ function FunctionList({
     );
 }
 
+function CallgraphList({
+    items,
+    search,
+    selectedId,
+    onSelect,
+}: {
+    items: CallgraphNode[];
+    search: string;
+    selectedId: string;
+    onSelect: (id: string) => void;
+}) {
+    const q = search.trim().toLowerCase();
+    const filtered = q
+        ? items.filter((it) =>
+            (it.display_name || '').toLowerCase().includes(q) ||
+            (it.file_display || '').toLowerCase().includes(q)
+        )
+        : items;
+
+    return (
+        <div className="max-h-[50vh] overflow-auto space-y-0.5">
+            {filtered.slice(0, 200).map((it) => (
+                <ListItem
+                    key={it.id}
+                    active={selectedId === it.id}
+                    onClick={() => onSelect(it.id)}
+                >
+                    <span className="text-muted mr-1">{it.kind}</span>
+                    {it.display_name} · {it.file_display}:{it.start_line}
+                </ListItem>
+            ))}
+            {filtered.length === 0 && (
+                <p className="text-[10px] text-muted px-2 py-1">No matches</p>
+            )}
+        </div>
+    );
+}
+
 // Edge list panel
 function EdgeList({
     edges,
@@ -383,6 +452,89 @@ function EdgeList({
     );
 }
 
+function CallEdgeList({
+    edges,
+    selectedId,
+    nodes,
+    onSelect,
+}: {
+    edges: CallgraphEdge[];
+    selectedId: string;
+    nodes: Map<string, CallgraphNode>;
+    onSelect: (id: string) => void;
+}) {
+    const outbound = edges.filter((e) => e.resolved && e.from === selectedId && e.to);
+    const inbound = edges.filter((e) => e.resolved && e.to === selectedId);
+
+    const selectedNode = nodes.get(selectedId);
+
+    const openCallerAtCallsite = (callerId: string, line?: number | null) => {
+        const caller = nodes.get(callerId);
+        if (!caller?.file) {
+            return;
+        }
+        vscode.postMessage({
+            command: 'openFile',
+            file: caller.file,
+            line: typeof line === 'number' ? line : undefined,
+        });
+    };
+
+    const openSelectedAtCallsite = (line?: number | null) => {
+        if (!selectedNode?.file) {
+            return;
+        }
+        vscode.postMessage({
+            command: 'openFile',
+            file: selectedNode.file,
+            line: typeof line === 'number' ? line : undefined,
+        });
+    };
+
+    return (
+        <div className="space-y-1 max-h-[30vh] overflow-auto">
+            <p className="text-[10px] text-muted">Callees ({outbound.length})</p>
+            {outbound.slice(0, 40).map((e) => {
+                const to = e.to as string;
+                const target = nodes.get(to);
+                const label = target ? target.display_name : e.to_raw;
+                return (
+                    <ListItem
+                        key={`out-${e.from}-${e.to_raw}-${String(e.line ?? '')}`}
+                        onClick={() => {
+                            onSelect(to);
+                            openSelectedAtCallsite(e.line ?? undefined);
+                        }}
+                    >
+                        <span className="text-muted uppercase mr-1">out</span>
+                        {label.length > 35 ? '…' + label.slice(-33) : label}
+                    </ListItem>
+                );
+            })}
+            {outbound.length === 0 && <p className="text-[10px] text-muted px-2">none</p>}
+
+            <p className="text-[10px] text-muted mt-2">Callers ({inbound.length})</p>
+            {inbound.slice(0, 40).map((e) => {
+                const caller = nodes.get(e.from);
+                const label = caller ? caller.display_name : e.from;
+                return (
+                    <ListItem
+                        key={`in-${e.from}-${e.to_raw}-${String(e.line ?? '')}`}
+                        onClick={() => {
+                            onSelect(e.from);
+                            openCallerAtCallsite(e.from, e.line ?? undefined);
+                        }}
+                    >
+                        <span className="text-muted uppercase mr-1">in</span>
+                        {label.length > 35 ? '…' + label.slice(-33) : label}
+                    </ListItem>
+                );
+            })}
+            {inbound.length === 0 && <p className="text-[10px] text-muted px-2">none</p>}
+        </div>
+    );
+}
+
 // Findings panel
 function FindingsPanel({ findings }: { findings: GraphData['logic_findings'] }) {
     if (!findings || findings.length === 0) {
@@ -422,7 +574,7 @@ function App() {
 
     const theme = useSignal<UiTheme>(initialUi.theme);
     const search = useSignal(initialUi.search);
-    const mode = useSignal<'functions' | 'blueprint'>(initialUi.mode);
+    const mode = useSignal<'functions' | 'calls' | 'blueprint'>(initialUi.mode);
 
     const kindMod = useSignal(true);
     const kindUse = useSignal(true);
@@ -434,11 +586,13 @@ function App() {
 
     const indexData = useSignal<IndexData | null>(null);
     const blueprintData = useSignal<BlueprintReport | null>(null);
+    const callgraphData = useSignal<CallgraphReport | null>(null);
     const graphData = useSignal<GraphData | null>(null);
     
     const selectedPath = useSignal('');
     const selectedFile = useSignal('');
     const selectedFn = useSignal('');
+    const selectedCall = useSignal('');
     const error = useSignal<string | null>(null);
 
     // Apply theme
@@ -489,6 +643,12 @@ function App() {
                 mode.value = 'functions';
                 error.value = null;
             }
+            if (msg.type === 'callgraphData') {
+                callgraphData.value = msg.data as CallgraphReport;
+                selectedCall.value = (msg.data?.nodes?.[0]?.id as string) ?? '';
+                mode.value = 'calls';
+                error.value = null;
+            }
             if (msg.type === 'error') {
                 error.value = msg.message ?? 'Error';
             }
@@ -515,6 +675,43 @@ function App() {
         }
         return map;
     }, [blueprintData.value]);
+
+    const callNodeMap = useMemo(() => {
+        const map = new Map<string, CallgraphNode>();
+        for (const n of callgraphData.value?.nodes ?? []) {
+            map.set(n.id, n);
+        }
+        return map;
+    }, [callgraphData.value]);
+
+    const callGraphElements = useMemo(() => {
+        if (!callgraphData.value || !selectedCall.value) {
+            return { nodes: [] as GraphNode[], edges: [] as GraphEdge[] };
+        }
+        const edges = (callgraphData.value.edges ?? []).filter((e) => e.resolved && (e.from === selectedCall.value || e.to === selectedCall.value));
+        const nodeIds = new Set<string>();
+        nodeIds.add(selectedCall.value);
+        for (const e of edges) {
+            nodeIds.add(e.from);
+            if (e.to) nodeIds.add(e.to);
+        }
+        const nodes: GraphNode[] = (callgraphData.value.nodes ?? [])
+            .filter((n) => nodeIds.has(n.id))
+            .map((n) => ({
+                id: n.id,
+                label: n.display_name,
+                language: 'rust',
+            }));
+        const graphEdges: GraphEdge[] = edges
+            .filter((e) => e.to)
+            .map((e) => ({
+                source: e.from,
+                target: e.to as string,
+                kind: e.kind,
+                resolved: e.resolved,
+            }));
+        return { nodes, edges: graphEdges };
+    }, [callgraphData.value, selectedCall.value]);
 
     const selectedClusterId = useMemo(() => {
         if (cluster.value === 'all') return null;
@@ -726,6 +923,12 @@ function App() {
                     >
                         Index
                     </Button>
+                    <Button
+                        size="sm"
+                        onClick={() => vscode.postMessage({ command: 'callgraphWorkspace' })}
+                    >
+                        Calls
+                    </Button>
                     <Button size="sm" variant="primary" onClick={() => vscode.postMessage({ command: 'blueprintWorkspace' })}>
                         Blueprint
                     </Button>
@@ -817,6 +1020,13 @@ function App() {
                                 selectedId={selectedPath.value}
                                 onSelect={(path) => selectedPath.value = path}
                             />
+                        ) : mode.value === 'calls' ? (
+                            <CallgraphList
+                                items={callgraphData.value?.nodes ?? []}
+                                search={search.value}
+                                selectedId={selectedCall.value}
+                                onSelect={(id) => selectedCall.value = id}
+                            />
                         ) : (
                             <FunctionList
                                 items={indexData.value?.items ?? []}
@@ -842,7 +1052,7 @@ function App() {
                 <Stack gap="sm">
                     {/* Graph */}
                     <Card padding="none" className="h-[45vh] min-h-[300px]">
-                        {blueprintData.value && graphElements.nodes.length > 0 ? (
+                        {mode.value === 'blueprint' && blueprintData.value && graphElements.nodes.length > 0 ? (
                             <Graph
                                 nodes={graphElements.nodes}
                                 edges={graphElements.edges}
@@ -857,13 +1067,30 @@ function App() {
                                 theme={theme.value === 'maple-light' ? 'light' : 'dark'}
                                 className="rounded"
                             />
+                        ) : mode.value === 'calls' && callgraphData.value && callGraphElements.nodes.length > 0 ? (
+                            <Graph
+                                nodes={callGraphElements.nodes}
+                                edges={callGraphElements.edges}
+                                selectedId={selectedCall.value}
+                                onNodeClick={(id) => selectedCall.value = id}
+                                onNodeDoubleClick={(id) => {
+                                    const node = callNodeMap.get(id);
+                                    if (node?.file) {
+                                        vscode.postMessage({ command: 'openFile', file: node.file, line: node.start_line });
+                                    }
+                                }}
+                                theme={theme.value === 'maple-light' ? 'light' : 'dark'}
+                                className="rounded"
+                            />
                         ) : error.value ? (
                             <div className="flex items-center justify-center h-full text-[11px] text-danger">
                                 {error.value}
                             </div>
                         ) : (
                             <div className="flex items-center justify-center h-full text-[11px] text-muted">
-                                Run Blueprint to visualize file dependencies
+                                {mode.value === 'calls'
+                                    ? 'Run Calls to visualize a function neighborhood'
+                                    : 'Run Blueprint to visualize file dependencies'}
                             </div>
                         )}
                     </Card>
@@ -872,12 +1099,18 @@ function App() {
                     <Card padding="sm">
                         <Row justify="between" className="mb-1">
                             <span className="text-[11px] font-semibold">
-                                {mode.value === 'blueprint' ? 'Edges' : 'Findings'}
+                                {mode.value === 'blueprint'
+                                    ? 'Edges'
+                                    : mode.value === 'calls'
+                                        ? 'Calls'
+                                        : 'Findings'}
                             </span>
                             <Badge variant="default">
                                 {mode.value === 'blueprint'
                                     ? (blueprintData.value?.edges?.length ?? 0)
-                                    : (graphData.value?.logic_findings?.length ?? 0)}
+                                    : mode.value === 'calls'
+                                        ? (callgraphData.value?.edges?.length ?? 0)
+                                        : (graphData.value?.logic_findings?.length ?? 0)}
                             </Badge>
                         </Row>
                         {mode.value === 'blueprint' && blueprintData.value ? (
@@ -886,6 +1119,13 @@ function App() {
                                 selectedPath={selectedPath.value}
                                 nodes={nodeMap}
                                 allowedKinds={allowedKinds}
+                            />
+                        ) : mode.value === 'calls' && callgraphData.value ? (
+                            <CallEdgeList
+                                edges={callgraphData.value.edges}
+                                selectedId={selectedCall.value}
+                                nodes={callNodeMap}
+                                onSelect={(id) => selectedCall.value = id}
                             />
                         ) : (
                             <FindingsPanel findings={graphData.value?.logic_findings} />

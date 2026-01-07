@@ -261,6 +261,12 @@ function ReviewTab({ state }: { state: DashboardState }) {
                     <Row gap="xs" className="mt-2">
                         <Button size="sm" onClick={() => vscode.postMessage({ type: 'openFlowMap' })}>Flow Map</Button>
                         <Button size="sm" onClick={() => vscode.postMessage({ type: 'runBlueprint' })}>Rebuild</Button>
+                        <Button size="sm" variant="ghost" onClick={() => vscode.postMessage({ type: 'openBlueprintDiffReport' })}>
+                            Diff
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => vscode.postMessage({ type: 'openBlueprintMapping' })}>
+                            Mapping
+                        </Button>
                     </Row>
                 </Card>
             )}
