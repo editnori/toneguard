@@ -102,12 +102,30 @@ fn language_for_path(path: &Path) -> Option<Language> {
 }
 
 fn to_display_path(path: &Path, base_dir: &Option<PathBuf>) -> String {
-    if let Some(base) = base_dir {
-        if let Ok(rel) = path.strip_prefix(base) {
-            return rel.to_string_lossy().replace('\\', "/");
+    // Keep display paths stable regardless of whether the scanner walked an absolute or relative root.
+    // If we have a base_dir, normalize relative paths under it before stripping the prefix.
+    let mut candidate = path.to_path_buf();
+    if candidate.is_relative() {
+        if let Some(base) = base_dir {
+            candidate = base.join(candidate);
         }
     }
-    path.to_string_lossy().replace('\\', "/")
+
+    let raw = if let Some(base) = base_dir {
+        candidate
+            .strip_prefix(base)
+            .unwrap_or(candidate.as_path())
+            .to_string_lossy()
+            .to_string()
+    } else {
+        candidate.to_string_lossy().to_string()
+    };
+
+    let normalized = raw.replace('\\', "/");
+    normalized
+        .strip_prefix("./")
+        .unwrap_or(normalized.as_str())
+        .to_string()
 }
 
 fn collect_code_files(paths: &[PathBuf], ignore: Option<&GlobSet>) -> Result<Vec<PathBuf>> {

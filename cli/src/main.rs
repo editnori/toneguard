@@ -659,6 +659,7 @@ fn is_supported_code(path: &Path) -> bool {
 }
 
 fn load_config(path: &PathBuf) -> anyhow::Result<(Config, PathBuf)> {
+    let cwd = env::current_dir()?;
     if path.exists() {
         let text = fs::read_to_string(path)
             .with_context(|| format!("Failed to read config {}", path.display()))?;
@@ -666,13 +667,21 @@ fn load_config(path: &PathBuf) -> anyhow::Result<(Config, PathBuf)> {
             .with_context(|| format!("Failed to parse YAML {}", path.display()))?;
         let cfg: Config = serde_yaml::from_value(value)
             .with_context(|| format!("Invalid config structure in {}", path.display()))?;
-        let dir = path
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| env::current_dir().expect("working dir"));
+
+        // Make the config root stable (absolute) so downstream features can produce consistent
+        // relative paths (e.g. blueprint edges that resolve to scanned nodes).
+        let abs_path = path.canonicalize().unwrap_or_else(|_| {
+            if path.is_absolute() {
+                path.clone()
+            } else {
+                cwd.join(path)
+            }
+        });
+
+        let dir = abs_path.parent().map(|p| p.to_path_buf()).unwrap_or(cwd);
         Ok((cfg, dir))
     } else {
-        Ok((Config::default(), env::current_dir()?))
+        Ok((Config::default(), cwd))
     }
 }
 
