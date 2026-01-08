@@ -175,6 +175,9 @@ function ReviewTab({ state }: { state: DashboardState }) {
                     <Button size="sm" onClick={() => vscode.postMessage({ type: 'runAudit' })}>Audit</Button>
                     <Button size="sm" onClick={() => vscode.postMessage({ type: 'runProposal' })}>Proposal</Button>
                     <Button size="sm" onClick={() => vscode.postMessage({ type: 'newFlow' })}>New flow</Button>
+                    <Button size="sm" onClick={() => vscode.postMessage({ type: 'openMarkdownPreview' })}>
+                        Preview
+                    </Button>
                     <Button size="sm" variant="ghost" onClick={() => vscode.postMessage({ type: 'copyReviewBundle' })}>
                         Copy bundle
                     </Button>
@@ -208,6 +211,9 @@ function ReviewTab({ state }: { state: DashboardState }) {
                     <Row gap="xs" className="mt-2">
                         <Button size="sm" onClick={() => vscode.postMessage({ type: 'openMarkdownReport' })}>
                             Report
+                        </Button>
+                        <Button size="sm" onClick={() => vscode.postMessage({ type: 'openMarkdownPreview' })}>
+                            Preview
                         </Button>
                         <Button size="sm" variant="ghost" onClick={() => vscode.postMessage({ type: 'runRecommended' })}>
                             Re-run

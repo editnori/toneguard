@@ -6,13 +6,13 @@ A concrete review artifact: flow spec checks + static entropy findings.
 
 ## Flow checks
 
-- Files: 7
+- Files: 9
 - Errors: 0
 - Warnings: 0
 
 ## Audit summary
 
-- Files scanned: 31
+- Files scanned: 32
 - Findings: 0
 
 ## Findings

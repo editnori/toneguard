@@ -8,15 +8,19 @@ tsconfig.json
 .eslintrc*
 *.map
 
-# Dev dependencies only (production deps are bundled)
-node_modules/.bin/**
-node_modules/@types/**
-node_modules/typescript/**
-node_modules/eslint/**
-node_modules/@eslint/**
-node_modules/vsce/**
-node_modules/@vscode/vsce/**
-node_modules/@resvg/**
+# Dependencies
+# Keep the runtime deps small: the extension host only requires `vscode-languageclient`
+# and its transitive runtime deps. Everything else is build-time only.
+node_modules/**
+!node_modules/vscode-languageclient/**
+!node_modules/vscode-languageserver-protocol/**
+!node_modules/vscode-languageserver-types/**
+!node_modules/vscode-jsonrpc/**
+!node_modules/minimatch/**
+!node_modules/brace-expansion/**
+!node_modules/balanced-match/**
+!node_modules/concat-map/**
+!node_modules/semver/**
 
 # Git
 .git/**

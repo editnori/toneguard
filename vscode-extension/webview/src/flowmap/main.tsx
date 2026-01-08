@@ -8,11 +8,15 @@ import { Graph, type GraphNode, type GraphEdge } from '../components/Graph';
 
 // Types
 type FlowIndexItem = {
+    id?: string;
     display_name: string;
     target_name: string;
     file: string;
     file_display: string;
     start_line: number;
+    end_line?: number;
+    signature?: string;
+    content_sha256?: string;
     language: string;
     kind: string;
 };
@@ -51,6 +55,7 @@ type BlueprintReport = {
         edges_resolved: number;
         by_language?: Record<string, number>;
         by_edge_kind?: Record<string, number>;
+        by_edge_kind_resolved?: Record<string, number>;
     };
     errors: { path: string; message: string }[];
 };
@@ -382,6 +387,9 @@ function CallgraphList({
                     onClick={() => onSelect(it.id)}
                 >
                     <span className="text-muted mr-1">{it.language ?? 'code'}</span>
+                    {typeof it.total_calls === 'number' && (
+                        <span className="text-muted mr-1">{it.total_calls}</span>
+                    )}
                     {it.display_name} · {it.file_display}:{it.start_line}
                 </ListItem>
             ))}
@@ -475,7 +483,8 @@ function CallEdgeList({
     nodes: Map<string, CallgraphNode>;
     onSelect: (id: string) => void;
 }) {
-    const outbound = edges.filter((e) => e.resolved && e.from === selectedId && e.to);
+    const outboundResolved = edges.filter((e) => e.resolved && e.from === selectedId && e.to);
+    const outboundUnresolved = edges.filter((e) => !e.resolved && e.from === selectedId);
     const inbound = edges.filter((e) => e.resolved && e.to === selectedId);
 
     const selectedNode = nodes.get(selectedId);
@@ -505,8 +514,8 @@ function CallEdgeList({
 
     return (
         <div className="space-y-1 max-h-[30vh] overflow-auto">
-            <p className="text-[10px] text-muted">Callees ({outbound.length})</p>
-            {outbound.slice(0, 40).map((e) => {
+            <p className="text-[10px] text-muted">Callees ({outboundResolved.length})</p>
+            {outboundResolved.slice(0, 40).map((e) => {
                 const to = e.to as string;
                 const target = nodes.get(to);
                 const label = target ? target.display_name : e.to_raw;
@@ -523,7 +532,20 @@ function CallEdgeList({
                     </ListItem>
                 );
             })}
-            {outbound.length === 0 && <p className="text-[10px] text-muted px-2">none</p>}
+            {outboundResolved.length === 0 && <p className="text-[10px] text-muted px-2">none</p>}
+
+            <p className="text-[10px] text-muted mt-2">Unresolved ({outboundUnresolved.length})</p>
+            {outboundUnresolved.slice(0, 40).map((e) => (
+                <ListItem
+                    key={`unresolved-${e.from}-${e.to_raw}-${String(e.line ?? '')}`}
+                    onClick={() => openSelectedAtCallsite(e.line ?? undefined)}
+                >
+                    <span className="text-muted uppercase mr-1">out</span>
+                    <span className="text-danger mr-1">{normalizeEdgeKind(e.kind)}</span>
+                    {(e.to_raw || '<unknown>').length > 35 ? '…' + (e.to_raw || '<unknown>').slice(-33) : (e.to_raw || '<unknown>')}
+                </ListItem>
+            ))}
+            {outboundUnresolved.length === 0 && <p className="text-[10px] text-muted px-2">none</p>}
 
             <p className="text-[10px] text-muted mt-2">Callers ({inbound.length})</p>
             {inbound.slice(0, 40).map((e) => {
@@ -688,7 +710,7 @@ function App() {
     const search = useSignal(initialUi.search);
     const mode = useSignal<'functions' | 'calls' | 'blueprint'>(initialUi.mode);
 
-    const kindMod = useSignal(true);
+    const kindMod = useSignal(false);
     const kindUse = useSignal(true);
     const kindImport = useSignal(true);
     const cluster = useSignal('all');
@@ -918,6 +940,30 @@ function App() {
 
     const selectedNode = nodeMap.get(selectedPath.value);
     const selectedDegrees = meta?.degrees.get(selectedPath.value) ?? { in: 0, out: 0, total: 0 };
+
+    const selectedCallNode = callNodeMap.get(selectedCall.value);
+    const callStats = callgraphData.value?.stats;
+    const callUnresolvedTotal = useMemo(() => {
+        if (!callgraphData.value) return 0;
+        return (callgraphData.value.edges ?? []).filter((e) => !e.resolved).length;
+    }, [callgraphData.value]);
+    const callOrphans = useMemo(() => {
+        const nodes = callgraphData.value?.nodes ?? [];
+        return nodes
+            .filter((n) => (n.in_calls ?? 0) === 0)
+            .sort((a, b) => (b.total_calls ?? 0) - (a.total_calls ?? 0))
+            .slice(0, 20);
+    }, [callgraphData.value]);
+    const callSinks = useMemo(() => {
+        const nodes = callgraphData.value?.nodes ?? [];
+        return nodes
+            .filter((n) => (n.out_calls ?? 0) === 0)
+            .sort((a, b) => (b.total_calls ?? 0) - (a.total_calls ?? 0))
+            .slice(0, 20);
+    }, [callgraphData.value]);
+    const callTopHubs = useMemo(() => {
+        return callgraphData.value?.stats?.top_hubs?.slice(0, 20) ?? [];
+    }, [callgraphData.value]);
     const selectedFns = useMemo(() => {
         if (!indexData.value || !selectedPath.value) return [];
         const items = Array.isArray(indexData.value.items) ? indexData.value.items : [];
@@ -930,85 +976,219 @@ function App() {
         vscode.postMessage({ command: 'copyText', text, label: 'Flow blueprint JSON' });
     };
 
-    const copyBlueprintContext = () => {
-        if (!blueprintData.value || !meta) return;
-
-        const clusterInfo =
-            selectedClusterId === null ? null : meta.clusters.find((c) => c.id === selectedClusterId) ?? null;
-
-        const outbound = blueprintData.value.edges
-            .filter((e) => e.from === selectedPath.value)
-            .filter((e) => allowedKinds.has(normalizeEdgeKind(e.kind)))
-            .slice(0, 60)
-            .map((e) => ({
-                kind: normalizeEdgeKind(e.kind),
-                to: e.to ?? null,
-                to_raw: e.to_raw,
-                line: e.line ?? null,
-                resolved: Boolean(e.resolved && e.to),
-            }));
-        const inbound = blueprintData.value.edges
-            .filter((e) => e.to === selectedPath.value)
-            .filter((e) => allowedKinds.has(normalizeEdgeKind(e.kind)))
-            .slice(0, 60)
-            .map((e) => ({
-                kind: normalizeEdgeKind(e.kind),
-                from: e.from,
-                to: e.to ?? null,
-                to_raw: e.to_raw,
-                line: e.line ?? null,
-                resolved: Boolean(e.resolved && e.to),
-            }));
-
-        const ctx = {
-            kind: 'toneguard.blueprint-context',
+    const copyReviewPacket = () => {
+        const packet: any = {
+            kind: 'toneguard.review-packet',
             version: 1,
-            filters: {
-                edge_kinds: Array.from(allowedKinds.values()).sort(),
+            generated_at: new Date().toISOString(),
+            ui: {
+                theme: theme.value,
+                mode: mode.value,
+            },
+            selection: {
                 cluster: selectedClusterId === null ? 'all' : selectedClusterId,
                 focus_cluster: Boolean(focusCluster.value && selectedClusterId !== null),
+                edge_kinds: Array.from(allowedKinds.values()).sort(),
+                selected_file: selectedPath.value || null,
+                selected_call: selectedCall.value || null,
+                selected_cfg: selectedCfg.value || null,
             },
-            notes: {
-                blueprint_edges: 'File-level dependencies from Rust mod/use + JS/TS/Py relative imports. Not a full call graph.',
-                flow_index: indexData.value ? 'Loaded (functions/methods across repo).' : 'Not loaded.',
-                cfg: 'Per-function CFG only (open a function to render).',
+            loaded: {
+                blueprint: Boolean(blueprintData.value),
+                callgraph: Boolean(callgraphData.value),
+                index: Boolean(indexData.value),
+                cfg: Boolean(graphData.value),
             },
-            stats: {
-                files: meta.clusters.reduce((sum, c) => sum + c.nodes.length, 0),
-                edges: meta.resolvedEdges.length,
-                clusters: meta.clusters.length,
-                orphans: meta.orphans.size,
-                sinks: meta.sinks.size,
-            },
-            hubs: meta.hubs.slice(0, 10),
-            cluster: clusterInfo
-                ? {
-                      id: clusterInfo.id,
-                      files: clusterInfo.nodes.length,
-                      edges: clusterInfo.edges,
-                      by_language: clusterInfo.byLanguage,
-                  }
-                : null,
-            selected: selectedNode
-                ? {
-                      path: selectedNode.path,
-                      language: selectedNode.language,
-                      lines: selectedNode.lines,
-                      size_bytes: selectedNode.size_bytes,
-                      degree: selectedDegrees,
-                      inbound,
-                      outbound,
-                      functions: selectedFns.map((f) => ({
-                          name: f.display_name,
-                          start_line: f.start_line,
-                          kind: f.kind,
-                      })),
-                  }
-                : null,
         };
 
-        const text = JSON.stringify(ctx, null, 2);
-        vscode.postMessage({ command: 'copyText', text, label: 'Blueprint context' });
+        const scopeFiles = new Set<string>();
+        if (meta && selectedClusterId !== null) {
+            const clusterInfo = meta.clusters.find((c) => c.id === selectedClusterId);
+            for (const p of clusterInfo?.nodes ?? []) {
+                scopeFiles.add(p);
+            }
+        } else if (selectedPath.value) {
+            scopeFiles.add(selectedPath.value);
+        } else if (selectedCallNode?.file_display) {
+            scopeFiles.add(selectedCallNode.file_display);
+        } else if (selectedFile.value && indexData.value) {
+            const display =
+                (indexData.value.items ?? []).find((it) => it.file === selectedFile.value)
+                    ?.file_display ?? '';
+            if (display) {
+                scopeFiles.add(display);
+            }
+        }
+        packet.scope = {
+            files: Array.from(scopeFiles.values()).sort().slice(0, 200),
+        };
+
+        if (blueprintData.value && meta) {
+            const clusterInfo =
+                selectedClusterId === null
+                    ? null
+                    : meta.clusters.find((c) => c.id === selectedClusterId) ?? null;
+
+            const outbound = blueprintData.value.edges
+                .filter((e) => e.from === selectedPath.value)
+                .filter((e) => allowedKinds.has(normalizeEdgeKind(e.kind)))
+                .slice(0, 60)
+                .map((e) => ({
+                    kind: normalizeEdgeKind(e.kind),
+                    to: e.to ?? null,
+                    to_raw: e.to_raw,
+                    line: e.line ?? null,
+                    resolved: Boolean(e.resolved && e.to),
+                }));
+            const inbound = blueprintData.value.edges
+                .filter((e) => e.to === selectedPath.value)
+                .filter((e) => allowedKinds.has(normalizeEdgeKind(e.kind)))
+                .slice(0, 60)
+                .map((e) => ({
+                    kind: normalizeEdgeKind(e.kind),
+                    from: e.from,
+                    to: e.to ?? null,
+                    to_raw: e.to_raw,
+                    line: e.line ?? null,
+                    resolved: Boolean(e.resolved && e.to),
+                }));
+
+            packet.blueprint = {
+                stats: blueprintData.value.stats,
+                computed: {
+                    clusters: meta.clusters.length,
+                    edges_resolved_filtered: meta.resolvedEdges.length,
+                    hubs: meta.hubs.slice(0, 10),
+                    orphans: meta.orphans.size,
+                    sinks: meta.sinks.size,
+                },
+                cluster: clusterInfo
+                    ? {
+                          id: clusterInfo.id,
+                          files: clusterInfo.nodes.length,
+                          edges: clusterInfo.edges,
+                          by_language: clusterInfo.byLanguage,
+                      }
+                    : null,
+                selected_file: selectedNode
+                    ? {
+                          path: selectedNode.path,
+                          language: selectedNode.language,
+                          lines: selectedNode.lines,
+                          size_bytes: selectedNode.size_bytes,
+                          degree: selectedDegrees,
+                          inbound,
+                          outbound,
+                      }
+                    : null,
+            };
+        }
+
+        if (callgraphData.value) {
+            const selected = selectedCallNode
+                ? {
+                      id: selectedCallNode.id,
+                      display_name: selectedCallNode.display_name,
+                      file_display: selectedCallNode.file_display,
+                      start_line: selectedCallNode.start_line,
+                      language: selectedCallNode.language ?? null,
+                      in_calls: selectedCallNode.in_calls ?? 0,
+                      out_calls: selectedCallNode.out_calls ?? 0,
+                      total_calls: selectedCallNode.total_calls ?? 0,
+                  }
+                : null;
+
+            const selectedOutboundResolved = (callgraphData.value.edges ?? [])
+                .filter((e) => e.resolved && e.from === selectedCall.value && e.to)
+                .slice(0, 80)
+                .map((e) => ({
+                    to: e.to as string,
+                    to_raw: e.to_raw,
+                    kind: normalizeEdgeKind(e.kind),
+                    line: e.line ?? null,
+                }));
+            const selectedOutboundUnresolved = (callgraphData.value.edges ?? [])
+                .filter((e) => !e.resolved && e.from === selectedCall.value)
+                .slice(0, 80)
+                .map((e) => ({
+                    to_raw: e.to_raw,
+                    kind: normalizeEdgeKind(e.kind),
+                    line: e.line ?? null,
+                }));
+            const selectedInbound = (callgraphData.value.edges ?? [])
+                .filter((e) => e.resolved && e.to === selectedCall.value)
+                .slice(0, 80)
+                .map((e) => ({
+                    from: e.from,
+                    kind: normalizeEdgeKind(e.kind),
+                    line: e.line ?? null,
+                }));
+
+            packet.callgraph = {
+                stats: callgraphData.value.stats,
+                unresolved_edges: callUnresolvedTotal,
+                hubs: callTopHubs.slice(0, 10),
+                selected,
+                selected_edges: selected
+                    ? {
+                          outbound_resolved: selectedOutboundResolved,
+                          outbound_unresolved: selectedOutboundUnresolved,
+                          inbound_resolved: selectedInbound,
+                      }
+                    : null,
+            };
+        }
+
+        if (indexData.value) {
+            const scope = scopeFiles.size
+                ? (indexData.value.items ?? []).filter((it) => scopeFiles.has(it.file_display))
+                : (indexData.value.items ?? []);
+            packet.index = {
+                files_scanned: indexData.value.files_scanned,
+                functions: indexData.value.functions,
+                by_language: indexData.value.by_language ?? null,
+                items: scope.slice(0, 200).map((it) => {
+                    const id = it.id ?? `${it.file_display}::${it.target_name}`;
+                    const callNode = callNodeMap.get(id);
+                    const clusterId = meta?.nodeToCluster.get(it.file_display) ?? null;
+                    return {
+                        id,
+                        display_name: it.display_name,
+                        target_name: it.target_name,
+                        file_display: it.file_display,
+                        start_line: it.start_line,
+                        end_line: it.end_line ?? null,
+                        kind: it.kind,
+                        language: it.language ?? null,
+                        signature: it.signature ?? null,
+                        content_sha256: it.content_sha256 ?? null,
+                        cluster_id: clusterId,
+                        calls: callNode
+                            ? {
+                                  in: callNode.in_calls ?? 0,
+                                  out: callNode.out_calls ?? 0,
+                                  total: callNode.total_calls ?? 0,
+                              }
+                            : null,
+                    };
+                }),
+            };
+
+            if (selectedFns.length > 0) {
+                packet.selected_functions = selectedFns.slice(0, 60).map((f) => ({
+                    id: f.id ?? `${f.file_display}::${f.target_name}`,
+                    display_name: f.display_name,
+                    kind: f.kind,
+                    start_line: f.start_line,
+                    end_line: f.end_line ?? null,
+                    signature: f.signature ?? null,
+                    content_sha256: f.content_sha256 ?? null,
+                }));
+            }
+        }
+
+        const text = JSON.stringify(packet, null, 2);
+        vscode.postMessage({ command: 'copyText', text, label: 'LLM review packet' });
     };
 
     return (
@@ -1055,15 +1235,24 @@ function App() {
                     <Button size="sm" variant="primary" onClick={() => vscode.postMessage({ command: 'blueprintWorkspace' })}>
                         Blueprint
                     </Button>
-                    <Button size="sm" variant="ghost" disabled={!blueprintData.value} onClick={copyBlueprintContext}>
-                        Copy LLM
+                    <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={!blueprintData.value && !callgraphData.value && !indexData.value && !graphData.value}
+                        onClick={copyReviewPacket}
+                    >
+                        Copy Packet
                     </Button>
                     <Button size="sm" variant="ghost" disabled={!blueprintData.value} onClick={copyBlueprintJson}>
                         Copy JSON
                     </Button>
                     {stats && (
                         <span className="text-[10px] text-muted ml-2">
-                            {stats.nodes} files · {stats.edges} edges · {stats.edges_resolved} resolved · {clusterCount} clusters
+                            {stats.nodes} files · {stats.edges} edges · {stats.edges_resolved} resolved
+                            {stats.by_edge_kind_resolved
+                                ? ` (use ${stats.by_edge_kind_resolved.use ?? 0}, import ${stats.by_edge_kind_resolved.import ?? 0}, mod ${stats.by_edge_kind_resolved.mod ?? 0})`
+                                : ''}{' '}
+                            · {clusterCount} clusters
                         </span>
                     )}
                 </Row>
@@ -1341,6 +1530,53 @@ function App() {
                         </Card>
                     )}
 
+                    {/* Selected call */}
+                    {mode.value === 'calls' && selectedCallNode && (
+                        <Card padding="sm">
+                            <Row justify="between" className="mb-1">
+                                <span className="text-[11px] font-semibold">Function</span>
+                                <Badge variant="default">{selectedCallNode.language ?? 'code'}</Badge>
+                            </Row>
+                            <div className="space-y-0.5 text-[10px] text-muted">
+                                <div className="truncate">{selectedCallNode.display_name}</div>
+                                <div className="truncate">
+                                    {selectedCallNode.file_display}:{selectedCallNode.start_line}
+                                </div>
+                                <div>
+                                    in {selectedCallNode.in_calls ?? 0} · out {selectedCallNode.out_calls ?? 0} · total{' '}
+                                    {selectedCallNode.total_calls ?? 0}
+                                </div>
+                            </div>
+                            <Row gap="xs" className="mt-2 flex-wrap">
+                                <Button
+                                    size="sm"
+                                    onClick={() =>
+                                        vscode.postMessage({
+                                            command: 'openFile',
+                                            file: selectedCallNode.file,
+                                            line: selectedCallNode.start_line,
+                                        })
+                                    }
+                                >
+                                    Open
+                                </Button>
+                                <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() =>
+                                        vscode.postMessage({
+                                            command: 'copyText',
+                                            text: selectedCallNode.id,
+                                            label: 'Callgraph node id',
+                                        })
+                                    }
+                                >
+                                    Copy id
+                                </Button>
+                            </Row>
+                        </Card>
+                    )}
+
                     {/* Orphan indicator */}
                     {mode.value === 'blueprint' && graphElements.nodes.filter(n => n.isOrphan).length > 0 && (
                         <Card padding="sm">
@@ -1364,6 +1600,76 @@ function App() {
                                     </ListItem>
                                 ))}
                             </div>
+                        </Card>
+                    )}
+
+                    {/* Callgraph hubs */}
+                    {mode.value === 'calls' && callgraphData.value && callTopHubs.length > 0 && (
+                        <Card padding="sm">
+                            <Row justify="between" className="mb-1">
+                                <span className="text-[11px] font-semibold">Call Hubs</span>
+                                <Badge variant="default">{callTopHubs.length}</Badge>
+                            </Row>
+                            <p className="text-[10px] text-muted">Functions with many calls in+out</p>
+                            <div className="mt-1 space-y-0.5 max-h-[15vh] overflow-auto">
+                                {callTopHubs.slice(0, 12).map((h) => (
+                                    <ListItem key={h.id} onClick={() => (selectedCall.value = h.id)}>
+                                        <span className="text-muted mr-1">{h.total_calls}</span>
+                                        {h.display_name.length > 40 ? '…' + h.display_name.slice(-38) : h.display_name}
+                                    </ListItem>
+                                ))}
+                            </div>
+                        </Card>
+                    )}
+
+                    {/* Callgraph orphan/sink indicators */}
+                    {mode.value === 'calls' && callgraphData.value && (callOrphans.length > 0 || callSinks.length > 0) && (
+                        <Card padding="sm">
+                            <Row justify="between" className="mb-1">
+                                <span className="text-[11px] font-semibold">Call Shape</span>
+                                <Badge variant="default">
+                                    {callStats ? `orphan ${callStats.orphan_nodes ?? 0} · sink ${callStats.sink_nodes ?? 0}` : '—'}
+                                </Badge>
+                            </Row>
+                            <div className="space-y-1">
+                                <div>
+                                    <p className="text-[10px] text-muted">Orphans (no inbound)</p>
+                                    <div className="mt-1 space-y-0.5 max-h-[10vh] overflow-auto">
+                                        {callOrphans.slice(0, 10).map((n) => (
+                                            <ListItem key={`orphan-${n.id}`} onClick={() => (selectedCall.value = n.id)}>
+                                                <span className="text-muted mr-1">{n.total_calls ?? 0}</span>
+                                                {n.display_name.length > 40 ? '…' + n.display_name.slice(-38) : n.display_name}
+                                            </ListItem>
+                                        ))}
+                                        {callOrphans.length === 0 && <p className="text-[10px] text-muted px-2">none</p>}
+                                    </div>
+                                </div>
+                                <div className="mt-2">
+                                    <p className="text-[10px] text-muted">Sinks (no outbound)</p>
+                                    <div className="mt-1 space-y-0.5 max-h-[10vh] overflow-auto">
+                                        {callSinks.slice(0, 10).map((n) => (
+                                            <ListItem key={`sink-${n.id}`} onClick={() => (selectedCall.value = n.id)}>
+                                                <span className="text-muted mr-1">{n.total_calls ?? 0}</span>
+                                                {n.display_name.length > 40 ? '…' + n.display_name.slice(-38) : n.display_name}
+                                            </ListItem>
+                                        ))}
+                                        {callSinks.length === 0 && <p className="text-[10px] text-muted px-2">none</p>}
+                                    </div>
+                                </div>
+                            </div>
+                        </Card>
+                    )}
+
+                    {/* Callgraph unresolved */}
+                    {mode.value === 'calls' && callgraphData.value && callUnresolvedTotal > 0 && (
+                        <Card padding="sm">
+                            <Row justify="between" className="mb-1">
+                                <span className="text-[11px] font-semibold text-warn">Unresolved</span>
+                                <Badge variant="warning">{callUnresolvedTotal}</Badge>
+                            </Row>
+                            <p className="text-[10px] text-muted">
+                                Calls we could not resolve to a known function id (names, dynamic dispatch, etc)
+                            </p>
                         </Card>
                     )}
 

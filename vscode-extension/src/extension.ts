@@ -11,6 +11,13 @@ import {
 
 let client: LanguageClient | undefined;
 
+let bundledCliIncompatible = false;
+let bundledCliIncompatibleHint: string | undefined;
+let cliCompatWarningShown = false;
+let bundledLspIncompatible = false;
+let bundledLspIncompatibleHint: string | undefined;
+let lspCompatWarningShown = false;
+
 // Skill installation state key
 const SKILL_PROMPT_DISMISSED_KEY = 'toneguard.skillPromptDismissed';
 
@@ -746,6 +753,10 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                 void vscode.commands.executeCommand('dwg.openFlowMap');
                 return;
             }
+            case 'openMarkdownPreview': {
+                void vscode.commands.executeCommand('dwg.openMarkdownPreview');
+                return;
+            }
             case 'addIgnore': {
                 const raw = typeof message.value === 'string' ? message.value : '';
                 const cleaned = raw.trim();
@@ -1404,6 +1415,14 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                 return;
             }
             const err = failure?.err;
+            if (err) {
+                maybeHandleBundledCliIncompatibility(
+                    this.context,
+                    this.outputChannel,
+                    cliCommand,
+                    `${stderr}\n${err.message}`
+                );
+            }
             this.outputChannel.appendLine(
                 `ToneGuard: Organization analysis failed: ${err?.message ?? 'unknown error'}`
             );
@@ -1487,6 +1506,7 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
             }
         } catch (error) {
             const err = error as NodeJS.ErrnoException;
+            maybeHandleBundledCliIncompatibility(this.context, this.outputChannel, cliCommand, err.message);
             this.outputChannel.appendLine(`ToneGuard: Organization fix failed: ${err.message}`);
             void vscode.window.showErrorMessage('ToneGuard: Failed to generate fix prompt. See output.');
         }
@@ -1944,6 +1964,7 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                 <button class="secondary" data-action="runAudit">Flow Audit</button>
                 <button class="secondary" data-action="runProposal">Proposal</button>
             </div>
+            <button class="secondary" data-action="openMarkdownPreview">Open Markdown Preview</button>
             <button class="ghost" data-action="copyReviewBundle">Copy AI review bundle</button>
         </div>
 
@@ -1986,6 +2007,7 @@ class ToneGuardDashboardProvider implements vscode.WebviewViewProvider {
                 </div>
                 <div id="repoIssues" class="list"></div>
                 <button class="ghost" data-action="openMarkdownReport">Open Markdown Report</button>
+                <button class="ghost" data-action="openMarkdownPreview">Open Markdown Preview</button>
             </div>
             <div id="flowCard" class="card" style="display: none;">
                 <div class="card-row">
@@ -3543,14 +3565,14 @@ async function fixWithAI(
  * 3. 'dwg-lsp' from PATH
  */
 function getServerCommand(context: vscode.ExtensionContext, userCommand: string): string {
-    // If user explicitly set a command (and it's not the default), use it
-    if (userCommand && userCommand !== 'dwg-lsp') {
-        return userCommand;
+    // If the user explicitly set a command, always honor it (including `dwg-lsp`).
+    if (userCommand && userCommand.trim().length > 0) {
+        return userCommand.trim();
     }
     
     // Try bundled binary first
     const bundledPath = getBundledServerPath(context);
-    if (bundledPath) {
+    if (bundledPath && !bundledLspIncompatible) {
         // Make sure it's executable on Unix
         if (os.platform() !== 'win32') {
             try {
@@ -3563,7 +3585,7 @@ function getServerCommand(context: vscode.ExtensionContext, userCommand: string)
     }
     
     // Fall back to PATH
-    return 'dwg-lsp';
+    return getLspCommandFromPath() ?? 'dwg-lsp';
 }
 
 /**
@@ -3593,6 +3615,198 @@ function commandExistsInPath(command: string): boolean {
     }
 }
 
+function getCliInstallCommandForPlatform(platformDir: string): string {
+    if (platformDir.startsWith('darwin')) {
+        return 'brew install toneguard  # or: cargo install --git https://github.com/editnori/toneguard dwg-cli';
+    }
+    if (platformDir.startsWith('win32')) {
+        return 'cargo install --git https://github.com/editnori/toneguard dwg-cli';
+    }
+    return 'cargo install --git https://github.com/editnori/toneguard dwg-cli';
+}
+
+function getCliCommandFromPath(): string | undefined {
+    if (commandExistsInPath('dwg')) {
+        return 'dwg';
+    }
+    // The published crate is `dwg-cli`; users often have this in PATH.
+    if (commandExistsInPath('dwg-cli')) {
+        return 'dwg-cli';
+    }
+    return undefined;
+}
+
+function getLspInstallCommandForPlatform(platformDir: string): string {
+    if (platformDir.startsWith('darwin')) {
+        return 'brew install toneguard  # or: cargo install --git https://github.com/editnori/toneguard dwg-lsp';
+    }
+    return 'cargo install --git https://github.com/editnori/toneguard dwg-lsp';
+}
+
+function getLspCommandFromPath(): string | undefined {
+    if (commandExistsInPath('dwg-lsp')) {
+        return 'dwg-lsp';
+    }
+    return undefined;
+}
+
+function extractMissingGlibcVersion(text: string): string | undefined {
+    const match = text.match(/GLIBC_(\d+(?:\.\d+)*)/);
+    if (!match) {
+        return undefined;
+    }
+    if (!/not found/i.test(text)) {
+        return undefined;
+    }
+    return match[1];
+}
+
+function maybeHandleBundledLspIncompatibility(
+    context: vscode.ExtensionContext,
+    outputChannel: vscode.OutputChannel,
+    commandPath: string,
+    message: string
+): boolean {
+    if (os.platform() !== 'linux') {
+        return false;
+    }
+    const glibc = extractMissingGlibcVersion(message);
+    if (!glibc) {
+        return false;
+    }
+
+    const bundledPath = getBundledServerPath(context);
+    if (bundledPath && commandPath === bundledPath) {
+        bundledLspIncompatible = true;
+        bundledLspIncompatibleHint = `GLIBC_${glibc}`;
+    }
+
+    if (lspCompatWarningShown) {
+        return true;
+    }
+    lspCompatWarningShown = true;
+
+    const pathLsp = getLspCommandFromPath();
+    const installCommand = getLspInstallCommandForPlatform(getPlatformDir());
+    const config = vscode.workspace.getConfiguration('dwg');
+
+    const actions: string[] = [];
+    if (pathLsp) {
+        actions.push(`Use PATH (${pathLsp})`);
+    }
+    actions.push('Open Settings');
+    actions.push('Copy Install Command');
+
+    void vscode.window
+        .showErrorMessage(
+            `ToneGuard: Bundled LSP is incompatible with this Linux (missing GLIBC_${glibc}).`,
+            ...actions
+        )
+        .then(async (choice) => {
+            if (!choice) {
+                return;
+            }
+            if (pathLsp && choice === `Use PATH (${pathLsp})`) {
+                await config.update('command', pathLsp, vscode.ConfigurationTarget.Global);
+                void vscode.window.showInformationMessage(
+                    `ToneGuard: Now using ${pathLsp} from PATH for language server.`
+                );
+                return;
+            }
+            if (choice === 'Open Settings') {
+                void vscode.commands.executeCommand(
+                    'workbench.action.openSettings',
+                    'dwg.command'
+                );
+                return;
+            }
+            if (choice === 'Copy Install Command') {
+                await vscode.env.clipboard.writeText(installCommand);
+                void vscode.window.showInformationMessage(
+                    'ToneGuard: Install command copied to clipboard.'
+                );
+            }
+        });
+
+    outputChannel.appendLine(
+        `ToneGuard: LSP failed due to missing GLIBC_${glibc}${bundledLspIncompatibleHint ? ` (${bundledLspIncompatibleHint})` : ''}`
+    );
+    return true;
+}
+
+function maybeHandleBundledCliIncompatibility(
+    context: vscode.ExtensionContext,
+    outputChannel: vscode.OutputChannel,
+    commandPath: string,
+    message: string
+): boolean {
+    if (os.platform() !== 'linux') {
+        return false;
+    }
+    const glibc = extractMissingGlibcVersion(message);
+    if (!glibc) {
+        return false;
+    }
+
+    const bundledPath = getBundledCliPath(context);
+    if (bundledPath && commandPath === bundledPath) {
+        bundledCliIncompatible = true;
+        bundledCliIncompatibleHint = `GLIBC_${glibc}`;
+    }
+
+    if (cliCompatWarningShown) {
+        return true;
+    }
+    cliCompatWarningShown = true;
+
+    const pathCli = getCliCommandFromPath();
+    const installCommand = getCliInstallCommandForPlatform(getPlatformDir());
+    const config = vscode.workspace.getConfiguration('dwg');
+
+    const actions: string[] = [];
+    if (pathCli) {
+        actions.push(`Use PATH (${pathCli})`);
+    }
+    actions.push('Open Settings');
+    actions.push('Copy Install Command');
+
+    void vscode.window
+        .showErrorMessage(
+            `ToneGuard: Bundled CLI is incompatible with this Linux (missing GLIBC_${glibc}).`,
+            ...actions
+        )
+        .then(async (choice) => {
+            if (!choice) {
+                return;
+            }
+            if (pathCli && choice === `Use PATH (${pathCli})`) {
+                await config.update('cliCommand', pathCli, vscode.ConfigurationTarget.Global);
+                void vscode.window.showInformationMessage(
+                    `ToneGuard: Now using ${pathCli} from PATH for CLI commands.`
+                );
+                return;
+            }
+            if (choice === 'Open Settings') {
+                void vscode.commands.executeCommand(
+                    'workbench.action.openSettings',
+                    'dwg.cliCommand'
+                );
+                return;
+            }
+            if (choice === 'Copy Install Command') {
+                await vscode.env.clipboard.writeText(installCommand);
+                void vscode.window.showInformationMessage(
+                    'ToneGuard: Install command copied to clipboard.'
+                );
+            }
+        });
+
+    outputChannel.appendLine(
+        `ToneGuard: CLI failed due to missing GLIBC_${glibc}${bundledCliIncompatibleHint ? ` (${bundledCliIncompatibleHint})` : ''}`
+    );
+    return true;
+}
+
 /**
  * Gets the binary availability status with helpful installation instructions.
  */
@@ -3600,7 +3814,7 @@ function getBinaryStatus(context: vscode.ExtensionContext): BinaryStatus {
     const platform = getPlatformDir();
     const bundledPath = getBundledCliPath(context);
     
-    if (bundledPath) {
+    if (bundledPath && !bundledCliIncompatible) {
         return {
             available: true,
             path: bundledPath,
@@ -3611,10 +3825,11 @@ function getBinaryStatus(context: vscode.ExtensionContext): BinaryStatus {
     }
     
     // Check if dwg is in PATH
-    if (commandExistsInPath('dwg')) {
+    const pathCli = getCliCommandFromPath();
+    if (pathCli) {
         return {
             available: true,
-            path: 'dwg',
+            path: pathCli,
             mode: 'PATH',
             platform,
             installCommand: '',
@@ -3622,14 +3837,7 @@ function getBinaryStatus(context: vscode.ExtensionContext): BinaryStatus {
     }
     
     // Binary not available - provide install instructions based on platform
-    let installCommand: string;
-    if (platform.startsWith('darwin')) {
-        installCommand = 'brew install toneguard  # or: cargo install --git https://github.com/editnori/toneguard dwg-cli';
-    } else if (platform.startsWith('win32')) {
-        installCommand = 'cargo install --git https://github.com/editnori/toneguard dwg-cli';
-    } else {
-        installCommand = 'cargo install --git https://github.com/editnori/toneguard dwg-cli';
-    }
+    const installCommand = getCliInstallCommandForPlatform(platform);
     
     return {
         available: false,
@@ -3681,11 +3889,12 @@ async function showBinaryMissingError(status: BinaryStatus): Promise<void> {
  * 3. 'dwg' from PATH
  */
 function getCliCommand(context: vscode.ExtensionContext, userCommand: string): string {
-    if (userCommand && userCommand !== 'dwg') {
-        return userCommand;
+    // If the user explicitly set a command, always honor it (including `dwg` / `dwg-cli`).
+    if (userCommand && userCommand.trim().length > 0) {
+        return userCommand.trim();
     }
     const bundledPath = getBundledCliPath(context);
-    if (bundledPath) {
+    if (bundledPath && !bundledCliIncompatible) {
         if (os.platform() !== 'win32') {
             try {
                 fs.chmodSync(bundledPath, 0o755);
@@ -3695,7 +3904,7 @@ function getCliCommand(context: vscode.ExtensionContext, userCommand: string): s
         }
         return bundledPath;
     }
-    return 'dwg';
+    return getCliCommandFromPath() ?? 'dwg';
 }
 
 /**
@@ -3951,12 +4160,448 @@ function getNonce(): string {
     return text;
 }
 
+const MARKDOWN_EXTENSIONS = new Set([
+    '.md',
+    '.markdown',
+    '.mdx',
+    '.mdoc',
+    '.rst',
+    '.txt',
+]);
+
+function isMarkdownFilePath(filePath: string): boolean {
+    const ext = path.extname(filePath).toLowerCase();
+    return MARKDOWN_EXTENSIONS.has(ext);
+}
+
+class MarkdownPreviewPanel {
+    public static currentPanel: MarkdownPreviewPanel | undefined;
+    public static readonly viewType = 'toneguard.markdownPreview';
+
+    private readonly panel: vscode.WebviewPanel;
+    private readonly context: vscode.ExtensionContext;
+    private readonly extensionUri: vscode.Uri;
+    private readonly outputChannel: vscode.OutputChannel;
+    private disposables: vscode.Disposable[] = [];
+    private currentFile: string | undefined;
+    private followActive = true;
+    private pendingUpdate: NodeJS.Timeout | undefined;
+    private webviewReady = false;
+    private pendingSend = false;
+
+    public static createOrShow(
+        context: vscode.ExtensionContext,
+        outputChannel: vscode.OutputChannel,
+        filePath?: string
+    ): MarkdownPreviewPanel {
+        const column = vscode.window.activeTextEditor
+            ? vscode.window.activeTextEditor.viewColumn
+            : undefined;
+
+        if (MarkdownPreviewPanel.currentPanel) {
+            MarkdownPreviewPanel.currentPanel.panel.reveal(column);
+            if (filePath) {
+                MarkdownPreviewPanel.currentPanel.loadFile(filePath);
+            }
+            return MarkdownPreviewPanel.currentPanel;
+        }
+
+        const panel = vscode.window.createWebviewPanel(
+            MarkdownPreviewPanel.viewType,
+            'ToneGuard Markdown Preview',
+            column || vscode.ViewColumn.One,
+            {
+                enableScripts: true,
+                retainContextWhenHidden: true,
+            }
+        );
+
+        MarkdownPreviewPanel.currentPanel = new MarkdownPreviewPanel(
+            panel,
+            context,
+            outputChannel,
+            filePath
+        );
+
+        return MarkdownPreviewPanel.currentPanel;
+    }
+
+    private constructor(
+        panel: vscode.WebviewPanel,
+        context: vscode.ExtensionContext,
+        outputChannel: vscode.OutputChannel,
+        filePath?: string
+    ) {
+        this.panel = panel;
+        this.context = context;
+        this.extensionUri = context.extensionUri;
+        this.outputChannel = outputChannel;
+
+        this.update();
+
+        this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
+
+        this.panel.webview.onDidReceiveMessage(
+            async (message: any) => {
+                switch (message.command) {
+                    case 'selectFile': {
+                        const files = await vscode.window.showOpenDialog({
+                            canSelectFiles: true,
+                            canSelectFolders: false,
+                            canSelectMany: false,
+                            filters: {
+                                Markdown: ['md', 'markdown', 'mdx', 'mdoc'],
+                                Text: ['txt', 'rst'],
+                            },
+                        });
+                        if (files && files[0]) {
+                            this.loadFile(files[0].fsPath);
+                        }
+                        break;
+                    }
+                    case 'refresh':
+                        this.sendMarkdown();
+                        break;
+                    case 'ready':
+                        this.webviewReady = true;
+                        if (this.pendingSend) {
+                            this.pendingSend = false;
+                            this.sendMarkdown();
+                        } else if (this.currentFile) {
+                            this.sendMarkdown();
+                        }
+                        break;
+                    case 'followActive': {
+                        this.followActive = Boolean(message.value);
+                        if (this.followActive) {
+                            this.tryLoadActiveEditor();
+                        }
+                        break;
+                    }
+                    case 'openFile': {
+                        const file = typeof message.path === 'string' ? message.path : '';
+                        if (file && fs.existsSync(file)) {
+                            const doc = await vscode.workspace.openTextDocument(file);
+                            await vscode.window.showTextDocument(doc, { preview: false });
+                        }
+                        break;
+                    }
+                    case 'openFileRelative': {
+                        const href = typeof message.href === 'string' ? message.href : '';
+                        if (href) {
+                            this.openRelativeFile(href);
+                        }
+                        break;
+                    }
+                    case 'openExternal': {
+                        const url = typeof message.url === 'string' ? message.url : '';
+                        if (url) {
+                            void vscode.env.openExternal(vscode.Uri.parse(url));
+                        }
+                        break;
+                    }
+                    case 'copyText': {
+                        const text = typeof message.text === 'string' ? message.text : '';
+                        const label = typeof message.label === 'string' ? message.label : 'Text';
+                        if (!text) {
+                            void vscode.window.showErrorMessage('ToneGuard: Nothing to copy.');
+                            break;
+                        }
+                        if (text.length > 2_000_000) {
+                            const choice = await vscode.window.showWarningMessage(
+                                `ToneGuard: ${label} is large (${Math.ceil(text.length / 1024)} KB). Copy anyway?`,
+                                'Copy',
+                                'Cancel'
+                            );
+                            if (choice !== 'Copy') {
+                                break;
+                            }
+                        }
+                        await vscode.env.clipboard.writeText(text);
+                        void vscode.window.showInformationMessage(`ToneGuard: Copied ${label} to clipboard.`);
+                        break;
+                    }
+                    case 'saveFile': {
+                        const content = typeof message.content === 'string' ? message.content : '';
+                        if (!content) {
+                            void vscode.window.showErrorMessage('ToneGuard: Nothing to save.');
+                            break;
+                        }
+                        const suggested = typeof message.suggestedName === 'string'
+                            ? message.suggestedName
+                            : 'toneguard-export.txt';
+                        const format = typeof message.format === 'string' ? message.format : 'txt';
+                        const root = getWorkspaceRoot();
+                        const defaultUri = root
+                            ? vscode.Uri.file(path.join(root, suggested))
+                            : vscode.Uri.file(suggested);
+                        const filters: Record<string, string[]> = {};
+                        if (format === 'html') {
+                            filters.HTML = ['html'];
+                        } else if (format === 'svg') {
+                            filters.SVG = ['svg'];
+                        } else if (format === 'confluence') {
+                            filters.XML = ['xml'];
+                        } else {
+                            filters.Text = ['txt'];
+                        }
+                        const uri = await vscode.window.showSaveDialog({
+                            defaultUri,
+                            filters,
+                        });
+                        if (!uri) {
+                            break;
+                        }
+                        try {
+                            fs.writeFileSync(uri.fsPath, content, 'utf8');
+                            this.outputChannel.appendLine(`ToneGuard: Saved ${format} to ${uri.fsPath}`);
+                            void vscode.window.showInformationMessage(`ToneGuard: Saved ${format} export.`);
+                            void vscode.commands.executeCommand('revealFileInOS', uri);
+                        } catch (error) {
+                            const err = error as NodeJS.ErrnoException;
+                            void vscode.window.showErrorMessage(`ToneGuard: Save failed: ${err.message}`);
+                        }
+                        break;
+                    }
+                    case 'showError': {
+                        const msg = typeof message.message === 'string' ? message.message : 'Preview error';
+                        void vscode.window.showErrorMessage(`ToneGuard: ${msg}`);
+                        break;
+                    }
+                    case 'setTheme': {
+                        const value = typeof message.value === 'string' ? message.value : 'vscode';
+                        const config = vscode.workspace.getConfiguration('dwg');
+                        await config.update('uiTheme', value, vscode.ConfigurationTarget.Global);
+                        void this.panel.webview.postMessage({ type: 'theme', value });
+                        break;
+                    }
+                }
+            },
+            null,
+            this.disposables
+        );
+
+        this.registerListeners();
+
+        if (filePath) {
+            this.loadFile(filePath);
+        } else {
+            this.tryLoadActiveEditor();
+        }
+    }
+
+    private registerListeners(): void {
+        this.disposables.push(
+            vscode.window.onDidChangeActiveTextEditor((editor) => {
+                if (!this.followActive || !editor) {
+                    return;
+                }
+                const nextPath = editor.document.fileName;
+                if (isMarkdownFilePath(nextPath)) {
+                    this.loadFile(nextPath);
+                }
+            })
+        );
+
+        this.disposables.push(
+            vscode.workspace.onDidChangeTextDocument((event) => {
+                if (!this.currentFile) {
+                    return;
+                }
+                if (event.document.uri.fsPath !== this.currentFile) {
+                    return;
+                }
+                this.scheduleUpdateFromDocument();
+            })
+        );
+
+        this.disposables.push(
+            vscode.workspace.onDidSaveTextDocument((doc) => {
+                if (this.currentFile && doc.uri.fsPath === this.currentFile) {
+                    this.sendMarkdown();
+                }
+            })
+        );
+    }
+
+    private scheduleUpdateFromDocument(): void {
+        if (this.pendingUpdate) {
+            clearTimeout(this.pendingUpdate);
+        }
+        this.pendingUpdate = setTimeout(() => {
+            this.sendMarkdown();
+        }, 250);
+    }
+
+    private tryLoadActiveEditor(): void {
+        const editor = vscode.window.activeTextEditor;
+        if (editor && isMarkdownFilePath(editor.document.fileName)) {
+            this.loadFile(editor.document.fileName);
+        } else {
+            void this.panel.webview.postMessage({
+                type: 'status',
+                message: 'No markdown file selected.',
+            });
+        }
+    }
+
+    private updateLocalRoots(filePath: string): void {
+        const roots: vscode.Uri[] = [this.extensionUri];
+        const fileDir = vscode.Uri.file(path.dirname(filePath));
+        roots.push(fileDir);
+        const workspaceRoot = getWorkspaceRoot();
+        if (workspaceRoot) {
+            roots.push(vscode.Uri.file(workspaceRoot));
+        }
+        this.panel.webview.options = {
+            enableScripts: true,
+            localResourceRoots: roots,
+        };
+    }
+
+    private getMarkdownText(filePath: string): string | null {
+        const openDoc = vscode.workspace.textDocuments.find(
+            (doc) => doc.uri.fsPath === filePath
+        );
+        if (openDoc) {
+            return openDoc.getText();
+        }
+        try {
+            return fs.readFileSync(filePath, 'utf8');
+        } catch {
+            return null;
+        }
+    }
+
+    public loadFile(filePath: string): void {
+        if (!fs.existsSync(filePath)) {
+            void vscode.window.showErrorMessage('ToneGuard: Markdown file not found.');
+            return;
+        }
+        this.currentFile = filePath;
+        this.updateLocalRoots(filePath);
+        this.sendMarkdown();
+    }
+
+    private sendMarkdown(): void {
+        if (!this.currentFile) {
+            return;
+        }
+        if (!this.webviewReady) {
+            this.pendingSend = true;
+            return;
+        }
+        const text = this.getMarkdownText(this.currentFile);
+        if (text === null) {
+            void vscode.window.showErrorMessage('ToneGuard: Failed to read markdown file.');
+            return;
+        }
+        const baseUri = this.panel.webview.asWebviewUri(
+            vscode.Uri.file(path.dirname(this.currentFile))
+        );
+        const payload = {
+            filePath: this.currentFile,
+            fileName: path.basename(this.currentFile),
+            baseUri: baseUri.toString(),
+            markdown: text,
+            updatedAt: fileMtimeLabel(this.currentFile),
+        };
+        void this.panel.webview.postMessage({ type: 'markdownData', data: payload });
+    }
+
+    private openRelativeFile(href: string): void {
+        if (!this.currentFile) {
+            return;
+        }
+        const cleaned = href.split('#')[0].split('?')[0];
+        if (!cleaned) {
+            return;
+        }
+        const target = path.resolve(path.dirname(this.currentFile), cleaned);
+        if (!fs.existsSync(target)) {
+            void vscode.window.showErrorMessage(`ToneGuard: File not found: ${cleaned}`);
+            return;
+        }
+        void vscode.workspace.openTextDocument(target).then((doc) => {
+            void vscode.window.showTextDocument(doc, { preview: false });
+        });
+    }
+
+    public setTheme(theme: string): void {
+        void this.panel.webview.postMessage({ type: 'theme', value: theme });
+    }
+
+    private update(): void {
+        const webview = this.panel.webview;
+        this.panel.title = 'ToneGuard Markdown Preview';
+        this.webviewReady = false;
+        this.panel.webview.html = this.getHtmlForWebview(webview);
+    }
+
+    private getHtmlForWebview(webview: vscode.Webview): string {
+        const nonce = getNonce();
+        const stylePath = vscode.Uri.joinPath(this.extensionUri, 'media', 'style.css');
+        const scriptPath = vscode.Uri.joinPath(this.extensionUri, 'media', 'preview.js');
+        if (fs.existsSync(stylePath.fsPath) && fs.existsSync(scriptPath.fsPath)) {
+            const styleUri = webview.asWebviewUri(stylePath);
+            const scriptUri = webview.asWebviewUri(scriptPath);
+            const uiTheme = vscode.workspace.getConfiguration('dwg').get<string>('uiTheme', 'vscode');
+            const initJson = JSON.stringify({ uiTheme }).replace(/</g, '\\u003c');
+            return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} https: data:; style-src ${webview.cspSource}; font-src ${webview.cspSource}; script-src ${webview.cspSource} 'nonce-${nonce}';">
+    <link rel="stylesheet" href="${styleUri}">
+    <title>ToneGuard Markdown Preview</title>
+</head>
+<body>
+    <div id="app"></div>
+    <script nonce="${nonce}">window.__TONEGUARD_PREVIEW_INITIAL_STATE__ = ${initJson};</script>
+    <script nonce="${nonce}" src="${scriptUri}"></script>
+</body>
+</html>`;
+        }
+
+        return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+    <title>ToneGuard Markdown Preview</title>
+    <style>
+        body { font-family: var(--vscode-font-family); padding: 16px; color: var(--vscode-foreground); }
+        code { background: var(--vscode-textCodeBlock-background); padding: 2px 4px; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <h2>ToneGuard Markdown Preview</h2>
+    <p>Preview bundle missing. Run <code>bun run webview:build</code> inside <code>vscode-extension</code>.</p>
+</body>
+</html>`;
+    }
+
+    public dispose(): void {
+        MarkdownPreviewPanel.currentPanel = undefined;
+        this.panel.dispose();
+        while (this.disposables.length) {
+            const x = this.disposables.pop();
+            if (x) {
+                x.dispose();
+            }
+        }
+    }
+}
+
 // Flow Map Panel for visualizing control flow graphs
 class FlowMapPanel {
     public static currentPanel: FlowMapPanel | undefined;
     public static readonly viewType = 'toneguard.flowMap';
 
     private readonly panel: vscode.WebviewPanel;
+    private readonly context: vscode.ExtensionContext;
     private readonly extensionUri: vscode.Uri;
     private disposables: vscode.Disposable[] = [];
     private cliPath: string;
@@ -3964,7 +4609,7 @@ class FlowMapPanel {
     private outputChannel: vscode.OutputChannel;
 
     public static createOrShow(
-        extensionUri: vscode.Uri,
+        context: vscode.ExtensionContext,
         cliPath: string,
         configPath: string,
         outputChannel: vscode.OutputChannel,
@@ -3996,7 +4641,7 @@ class FlowMapPanel {
 
         FlowMapPanel.currentPanel = new FlowMapPanel(
             panel,
-            extensionUri,
+            context,
             cliPath,
             configPath,
             outputChannel
@@ -4011,13 +4656,14 @@ class FlowMapPanel {
 
     private constructor(
         panel: vscode.WebviewPanel,
-        extensionUri: vscode.Uri,
+        context: vscode.ExtensionContext,
         cliPath: string,
         configPath: string,
         outputChannel: vscode.OutputChannel
     ) {
         this.panel = panel;
-        this.extensionUri = extensionUri;
+        this.context = context;
+        this.extensionUri = context.extensionUri;
         this.cliPath = cliPath;
         this.configPath = configPath;
         this.outputChannel = outputChannel;
@@ -4151,6 +4797,11 @@ class FlowMapPanel {
         void this.panel.webview.postMessage({ type: 'theme', value: theme });
     }
 
+    public setRuntime(cliPath: string, configPath: string): void {
+        this.cliPath = cliPath;
+        this.configPath = configPath;
+    }
+
     private async indexWorkspace(): Promise<void> {
         const workspaceRoot = getWorkspaceRoot();
         if (!workspaceRoot) {
@@ -4211,6 +4862,7 @@ class FlowMapPanel {
             });
         } catch (error) {
             const err = error as NodeJS.ErrnoException;
+            maybeHandleBundledCliIncompatibility(this.context, this.outputChannel, this.cliPath, err.message);
             this.outputChannel.appendLine(`ToneGuard: Flow index failed: ${err.message}`);
             void this.panel.webview.postMessage({
                 type: 'error',
@@ -4276,6 +4928,7 @@ class FlowMapPanel {
             void this.panel.webview.postMessage({ type: 'blueprintData', data: report });
         } catch (error) {
             const err = error as NodeJS.ErrnoException;
+            maybeHandleBundledCliIncompatibility(this.context, this.outputChannel, this.cliPath, err.message);
             this.outputChannel.appendLine(`ToneGuard: Flow blueprint failed: ${err.message}`);
             void this.panel.webview.postMessage({
                 type: 'error',
@@ -4342,6 +4995,7 @@ class FlowMapPanel {
             void this.panel.webview.postMessage({ type: 'callgraphData', data: report });
         } catch (error) {
             const err = error as NodeJS.ErrnoException;
+            maybeHandleBundledCliIncompatibility(this.context, this.outputChannel, this.cliPath, err.message);
             this.outputChannel.appendLine(`ToneGuard: Flow call graph failed: ${err.message}`);
             void this.panel.webview.postMessage({
                 type: 'error',
@@ -4390,6 +5044,12 @@ class FlowMapPanel {
                             this.outputChannel.appendLine(stderrText);
                         }
                         if (error) {
+                            maybeHandleBundledCliIncompatibility(
+                                this.context,
+                                this.outputChannel,
+                                this.cliPath,
+                                stderrText || error.message
+                            );
                             reject(new Error(stderrText || error.message));
                             return;
                         }
@@ -4924,9 +5584,9 @@ class FlowMapPanel {
 
 export function activate(context: vscode.ExtensionContext): void {
     const config = vscode.workspace.getConfiguration('dwg');
-    const userCommand = config.get<string>('command', 'dwg-lsp');
+    const userCommand = config.get<string>('command', '');
     const userCliCommand = config.get<string>('cliCommand', '');
-    const userConfigPath = config.get<string>('configPath', 'layth-style.yml');
+    const userConfigPath = config.get<string>('configPath', '');
     let profile = config.get<string>('profile', '').trim();
 
     // Resolve actual paths
@@ -5085,6 +5745,8 @@ export function activate(context: vscode.ExtensionContext): void {
             configPath = nextConfigPath;
             profile = nextProfile;
             FlowMapPanel.currentPanel?.setTheme(nextTheme);
+            FlowMapPanel.currentPanel?.setRuntime(nextCli, nextConfigPath);
+            MarkdownPreviewPanel.currentPanel?.setTheme(nextTheme);
             refreshAll();
         })
     );
@@ -5134,6 +5796,18 @@ export function activate(context: vscode.ExtensionContext): void {
     
     // Start the client and handle errors gracefully
     client.start().catch((err: Error) => {
+        if (
+            maybeHandleBundledLspIncompatibility(
+                context,
+                outputChannel,
+                command,
+                err.message
+            )
+        ) {
+            outputChannel.appendLine(`Error starting server: ${err.message}`);
+            return;
+        }
+
         const bundledPath = getBundledServerPath(context);
         if (!bundledPath) {
             void vscode.window.showErrorMessage(
@@ -5211,6 +5885,13 @@ export function activate(context: vscode.ExtensionContext): void {
                                 outputChannel.appendLine(stderr);
                             }
                             if (error) {
+                                const stderrText = String(stderr ?? '');
+                                maybeHandleBundledCliIncompatibility(
+                                    context,
+                                    outputChannel,
+                                    cliCommand,
+                                    `${stderrText}\n${error.message}`
+                                );
                                 reject(error);
                                 return;
                             }
@@ -5302,6 +5983,12 @@ export function activate(context: vscode.ExtensionContext): void {
                                 }
                             }
                             if (error) {
+                                maybeHandleBundledCliIncompatibility(
+                                    context,
+                                    outputChannel,
+                                    cliCommand,
+                                    `${stderrText}\n${error.message}`
+                                );
                                 outputChannel.appendLine(
                                     'ToneGuard: Markdown scan completed with issues (non-zero exit).'
                                 );
@@ -5558,6 +6245,7 @@ export function activate(context: vscode.ExtensionContext): void {
             } catch (error) {
                 const err = error as NodeJS.ErrnoException;
                 const message = err.message || String(err);
+                maybeHandleBundledCliIncompatibility(context, outputChannel, cliCommand, message);
                 outputChannel.appendLine(
                     `ToneGuard: Recommended run failed: ${message}`
                 );
@@ -5610,6 +6298,7 @@ export function activate(context: vscode.ExtensionContext): void {
                 if (error) {
                     const err = error as NodeJS.ErrnoException;
                     const message = err.message || String(err);
+                    maybeHandleBundledCliIncompatibility(context, outputChannel, cliCommand, message);
                     outputChannel.appendLine(`ToneGuard: Flow audit failed: ${message}`);
                     if (err.code === 'ENOENT') {
                         void vscode.window.showErrorMessage(
@@ -5689,6 +6378,7 @@ export function activate(context: vscode.ExtensionContext): void {
                 if (error) {
                     const err = error as NodeJS.ErrnoException;
                     const message = err.message || String(err);
+                    maybeHandleBundledCliIncompatibility(context, outputChannel, cliCommand, message);
                     outputChannel.appendLine(`ToneGuard: Flow propose failed: ${message}`);
                     void vscode.window.showErrorMessage(
                         `ToneGuard flow propose failed. See output for details.`
@@ -5767,6 +6457,7 @@ export function activate(context: vscode.ExtensionContext): void {
                 if (error) {
                     const err = error as NodeJS.ErrnoException;
                     const message = err.message || String(err);
+                    maybeHandleBundledCliIncompatibility(context, outputChannel, cliCommand, message);
                     outputChannel.appendLine(`ToneGuard: Blueprint failed: ${message}`);
                     void vscode.window.showErrorMessage(
                         'ToneGuard: Blueprint failed. See output for details.'
@@ -5893,6 +6584,7 @@ export function activate(context: vscode.ExtensionContext): void {
                 if (error) {
                     const err = error as NodeJS.ErrnoException;
                     const message = err.message || String(err);
+                    maybeHandleBundledCliIncompatibility(context, outputChannel, cliCommand, message);
                     outputChannel.appendLine(`ToneGuard: Flow new failed: ${message}`);
                     void vscode.window.showErrorMessage(
                         `ToneGuard flow new failed. See output for details.`
@@ -5990,6 +6682,23 @@ export function activate(context: vscode.ExtensionContext): void {
         })
     );
 
+    // Command to open Markdown preview
+    context.subscriptions.push(
+        vscode.commands.registerCommand('dwg.openMarkdownPreview', async (uri?: vscode.Uri) => {
+            let filePath: string | undefined;
+            if (uri?.fsPath && isMarkdownFilePath(uri.fsPath)) {
+                filePath = uri.fsPath;
+            } else {
+                const activeEditor = vscode.window.activeTextEditor;
+                if (activeEditor && isMarkdownFilePath(activeEditor.document.fileName)) {
+                    filePath = activeEditor.document.fileName;
+                }
+            }
+
+            MarkdownPreviewPanel.createOrShow(context, outputChannel, filePath);
+        })
+    );
+
     // Command to open Flow Map panel
     context.subscriptions.push(
         vscode.commands.registerCommand('dwg.openFlowMap', async () => {
@@ -6005,7 +6714,7 @@ export function activate(context: vscode.ExtensionContext): void {
             }
 
             FlowMapPanel.createOrShow(
-                context.extensionUri,
+                context,
                 cliCommand,
                 configPath,
                 outputChannel,

@@ -20,6 +20,7 @@ use globset::{Glob, GlobSet, GlobSetBuilder};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value as YamlValue;
+use syn::spanned::Spanned;
 use walkdir::WalkDir;
 
 /// Deterministic Writing Guard CLI entry point.
@@ -336,6 +337,10 @@ struct FlowIndexArgs {
     /// Path to config file (YAML).
     #[arg(long, default_value = "layth-style.yml")]
     config: PathBuf,
+
+    /// Output format: json, jsonl.
+    #[arg(long, default_value = "json")]
+    format: String,
 
     /// Write JSON output to file.
     #[arg(long)]
@@ -2450,14 +2455,19 @@ fn run_flow_graph(args: FlowGraphArgs) -> anyhow::Result<()> {
 
 fn run_flow_index(args: FlowIndexArgs) -> anyhow::Result<()> {
     use dwg_core::cfg::CfgLanguage;
+    use sha2::{Digest, Sha256};
 
     #[derive(Debug, Serialize)]
     struct FlowIndexItem {
+        id: String,
         display_name: String,
         target_name: String,
         file: String,
         file_display: String,
         start_line: u32,
+        end_line: u32,
+        signature: String,
+        content_sha256: String,
         language: CfgLanguage,
         kind: String,
     }
@@ -2468,6 +2478,54 @@ fn run_flow_index(args: FlowIndexArgs) -> anyhow::Result<()> {
         functions: usize,
         by_language: BTreeMap<String, usize>,
         items: Vec<FlowIndexItem>,
+    }
+
+    #[derive(Debug, Serialize)]
+    #[serde(tag = "record", rename_all = "kebab-case")]
+    enum FlowIndexJsonlRecord<'a> {
+        Stats {
+            files_scanned: usize,
+            functions: usize,
+            by_language: &'a BTreeMap<String, usize>,
+        },
+        Item {
+            item: &'a FlowIndexItem,
+        },
+    }
+
+    fn sha256_hex(bytes: &[u8]) -> String {
+        let digest = Sha256::digest(bytes);
+        let mut out = String::with_capacity(digest.len() * 2);
+        for b in digest {
+            use std::fmt::Write;
+            let _ = write!(&mut out, "{:02x}", b);
+        }
+        out
+    }
+
+    fn normalize_span(start_line: u32, end_line: u32, total_lines: usize) -> (u32, u32) {
+        let start = start_line.max(1);
+        let end = end_line.max(start);
+        let max_line = total_lines.max(1) as u32;
+        (start.min(max_line), end.min(max_line))
+    }
+
+    fn line_at(lines: &[&str], line: u32) -> String {
+        let idx = line.saturating_sub(1) as usize;
+        lines.get(idx).copied().unwrap_or("").trim().to_string()
+    }
+
+    fn slice_lines(lines: &[&str], start_line: u32, end_line: u32) -> String {
+        if lines.is_empty() {
+            return String::new();
+        }
+        let start_idx = start_line.saturating_sub(1) as usize;
+        let end_idx = end_line.saturating_sub(1) as usize;
+        if start_idx >= lines.len() {
+            return String::new();
+        }
+        let end_idx = end_idx.min(lines.len() - 1);
+        lines[start_idx..=end_idx].join("\n")
     }
 
     let (cfg, config_root) = load_config(&args.config)?;
@@ -2489,6 +2547,7 @@ fn run_flow_index(args: FlowIndexArgs) -> anyhow::Result<()> {
             "rs" => {
                 let before = items.len();
                 let text = fs::read_to_string(path)?;
+                let lines: Vec<&str> = text.lines().collect();
                 let file = syn::parse_file(&text)
                     .map_err(|e| anyhow!("Failed to parse Rust file: {}", e))?;
 
@@ -2497,12 +2556,23 @@ fn run_flow_index(args: FlowIndexArgs) -> anyhow::Result<()> {
                         syn::Item::Fn(item_fn) => {
                             let name = item_fn.sig.ident.to_string();
                             let start_line = item_fn.sig.ident.span().start().line as u32;
+                            let end_line = item_fn.span().end().line as u32;
+                            let (start_line, end_line) =
+                                normalize_span(start_line, end_line, lines.len());
+                            let signature = line_at(&lines, start_line);
+                            let slice = slice_lines(&lines, start_line, end_line);
+                            let content_sha256 = sha256_hex(slice.as_bytes());
+                            let id = format!("{file_display}::{name}");
                             items.push(FlowIndexItem {
+                                id,
                                 display_name: name.clone(),
                                 target_name: name,
                                 file: file_abs.clone(),
                                 file_display: file_display.clone(),
                                 start_line,
+                                end_line,
+                                signature,
+                                content_sha256,
                                 language: CfgLanguage::Rust,
                                 kind: "function".to_string(),
                             });
@@ -2522,12 +2592,24 @@ fn run_flow_index(args: FlowIndexArgs) -> anyhow::Result<()> {
                                     let fn_name = method.sig.ident.to_string();
                                     let display_name = format!("{}::{}", self_ty, fn_name);
                                     let start_line = method.sig.ident.span().start().line as u32;
+                                    let end_line = method.span().end().line as u32;
+                                    let (start_line, end_line) =
+                                        normalize_span(start_line, end_line, lines.len());
+                                    let target_name = format!("{}::{}", self_ty, fn_name);
+                                    let signature = line_at(&lines, start_line);
+                                    let slice = slice_lines(&lines, start_line, end_line);
+                                    let content_sha256 = sha256_hex(slice.as_bytes());
+                                    let id = format!("{file_display}::{target_name}");
                                     items.push(FlowIndexItem {
+                                        id,
                                         display_name,
-                                        target_name: format!("{}::{}", self_ty, fn_name),
+                                        target_name,
                                         file: file_abs.clone(),
                                         file_display: file_display.clone(),
                                         start_line,
+                                        end_line,
+                                        signature,
+                                        content_sha256,
                                         language: CfgLanguage::Rust,
                                         kind: "method".to_string(),
                                     });
@@ -2546,6 +2628,7 @@ fn run_flow_index(args: FlowIndexArgs) -> anyhow::Result<()> {
                 let before = items.len();
                 let text = fs::read_to_string(path)?;
                 let source = text.as_bytes();
+                let lines: Vec<&str> = text.lines().collect();
                 let is_ts = ext == "ts" || ext == "tsx";
                 let mut parser = tree_sitter::Parser::new();
                 let language = if is_ts {
@@ -2571,6 +2654,7 @@ fn run_flow_index(args: FlowIndexArgs) -> anyhow::Result<()> {
                 fn visit_node(
                     node: tree_sitter::Node,
                     source: &[u8],
+                    lines: &[&str],
                     file_abs: &str,
                     file_display: &str,
                     language: CfgLanguage,
@@ -2586,6 +2670,7 @@ fn run_flow_index(args: FlowIndexArgs) -> anyhow::Result<()> {
                                     visit_node(
                                         child,
                                         source,
+                                        lines,
                                         file_abs,
                                         file_display,
                                         language,
@@ -2600,6 +2685,7 @@ fn run_flow_index(args: FlowIndexArgs) -> anyhow::Result<()> {
                                     visit_node(
                                         child,
                                         source,
+                                        lines,
                                         file_abs,
                                         file_display,
                                         language,
@@ -2615,12 +2701,23 @@ fn run_flow_index(args: FlowIndexArgs) -> anyhow::Result<()> {
                                 .and_then(|n| node_text(n, source));
                             if let Some(name) = name {
                                 let start_line = (node.start_position().row + 1) as u32;
+                                let end_line = (node.end_position().row + 1) as u32;
+                                let (start_line, end_line) =
+                                    normalize_span(start_line, end_line, lines.len());
+                                let signature = line_at(lines, start_line);
+                                let slice = slice_lines(lines, start_line, end_line);
+                                let content_sha256 = sha256_hex(slice.as_bytes());
+                                let id = format!("{file_display}::{name}");
                                 items.push(FlowIndexItem {
+                                    id,
                                     display_name: name.clone(),
                                     target_name: name,
                                     file: file_abs.to_string(),
                                     file_display: file_display.to_string(),
                                     start_line,
+                                    end_line,
+                                    signature,
+                                    content_sha256,
                                     language,
                                     kind: "function".to_string(),
                                 });
@@ -2632,16 +2729,28 @@ fn run_flow_index(args: FlowIndexArgs) -> anyhow::Result<()> {
                                 .and_then(|n| node_text(n, source));
                             if let Some(name) = name {
                                 let start_line = (node.start_position().row + 1) as u32;
+                                let end_line = (node.end_position().row + 1) as u32;
+                                let (start_line, end_line) =
+                                    normalize_span(start_line, end_line, lines.len());
                                 let display_name = class_stack
                                     .last()
-                                    .map(|c| format!("{}.{}", c, name))
+                                    .map(|c| format!("{c}::{name}"))
                                     .unwrap_or_else(|| name.clone());
+                                let target_name = display_name.clone();
+                                let signature = line_at(lines, start_line);
+                                let slice = slice_lines(lines, start_line, end_line);
+                                let content_sha256 = sha256_hex(slice.as_bytes());
+                                let id = format!("{file_display}::{target_name}");
                                 items.push(FlowIndexItem {
+                                    id,
                                     display_name,
-                                    target_name: name,
+                                    target_name,
                                     file: file_abs.to_string(),
                                     file_display: file_display.to_string(),
                                     start_line,
+                                    end_line,
+                                    signature,
+                                    content_sha256,
                                     language,
                                     kind: "method".to_string(),
                                 });
@@ -2659,12 +2768,24 @@ fn run_flow_index(args: FlowIndexArgs) -> anyhow::Result<()> {
                                     if let Some(name) = node_text(name_node, source) {
                                         let start_line =
                                             (value_node.start_position().row + 1) as u32;
+                                        let end_line =
+                                            (value_node.end_position().row + 1) as u32;
+                                        let (start_line, end_line) =
+                                            normalize_span(start_line, end_line, lines.len());
+                                        let signature = line_at(lines, start_line);
+                                        let slice = slice_lines(lines, start_line, end_line);
+                                        let content_sha256 = sha256_hex(slice.as_bytes());
+                                        let id = format!("{file_display}::{name}");
                                         items.push(FlowIndexItem {
+                                            id,
                                             display_name: name.clone(),
                                             target_name: name,
                                             file: file_abs.to_string(),
                                             file_display: file_display.to_string(),
                                             start_line,
+                                            end_line,
+                                            signature,
+                                            content_sha256,
                                             language,
                                             kind: "function".to_string(),
                                         });
@@ -2678,6 +2799,7 @@ fn run_flow_index(args: FlowIndexArgs) -> anyhow::Result<()> {
                                 visit_node(
                                     child,
                                     source,
+                                    lines,
                                     file_abs,
                                     file_display,
                                     language,
@@ -2698,6 +2820,7 @@ fn run_flow_index(args: FlowIndexArgs) -> anyhow::Result<()> {
                 visit_node(
                     tree.root_node(),
                     source,
+                    &lines,
                     &file_abs,
                     &file_display,
                     lang,
@@ -2714,6 +2837,7 @@ fn run_flow_index(args: FlowIndexArgs) -> anyhow::Result<()> {
                 let before = items.len();
                 let text = fs::read_to_string(path)?;
                 let source = text.as_bytes();
+                let lines: Vec<&str> = text.lines().collect();
                 let mut parser = tree_sitter::Parser::new();
                 let language = tree_sitter_python::LANGUAGE.into();
                 parser.set_language(&language)?;
@@ -2729,6 +2853,7 @@ fn run_flow_index(args: FlowIndexArgs) -> anyhow::Result<()> {
                 fn visit_node(
                     node: tree_sitter::Node,
                     source: &[u8],
+                    lines: &[&str],
                     file_abs: &str,
                     file_display: &str,
                     class_stack: &mut Vec<String>,
@@ -2744,6 +2869,7 @@ fn run_flow_index(args: FlowIndexArgs) -> anyhow::Result<()> {
                                         visit_node(
                                             child,
                                             source,
+                                            lines,
                                             file_abs,
                                             file_display,
                                             class_stack,
@@ -2754,32 +2880,42 @@ fn run_flow_index(args: FlowIndexArgs) -> anyhow::Result<()> {
                                     return;
                                 }
                             }
-                            let mut cursor = node.walk();
-                            for child in node.children(&mut cursor) {
-                                visit_node(
-                                    child,
-                                    source,
-                                    file_abs,
-                                    file_display,
-                                    class_stack,
-                                    items,
-                                );
-                            }
+	                            let mut cursor = node.walk();
+	                            for child in node.children(&mut cursor) {
+	                                visit_node(
+	                                    child,
+	                                    source,
+	                                    lines,
+	                                    file_abs,
+	                                    file_display,
+	                                    class_stack,
+	                                    items,
+	                                );
+	                            }
                         }
                         "function_definition" => {
                             if let Some(name_node) = node.child_by_field_name("name") {
                                 if let Some(name) = node_text(name_node, source) {
                                     let start_line = (node.start_position().row + 1) as u32;
-                                    let display_name = class_stack
-                                        .last()
-                                        .map(|c| format!("{}.{}", c, name))
-                                        .unwrap_or_else(|| name.clone());
+                                    let end_line = (node.end_position().row + 1) as u32;
+                                    let (start_line, end_line) =
+                                        normalize_span(start_line, end_line, lines.len());
+                                    let display_name = class_stack.last().map(|c| format!("{c}::{name}")).unwrap_or_else(|| name.clone());
+                                    let target_name = display_name.clone();
+                                    let signature = line_at(lines, start_line);
+                                    let slice = slice_lines(lines, start_line, end_line);
+                                    let content_sha256 = sha256_hex(slice.as_bytes());
+                                    let id = format!("{file_display}::{target_name}");
                                     items.push(FlowIndexItem {
+                                        id,
                                         display_name,
-                                        target_name: name,
+                                        target_name,
                                         file: file_abs.to_string(),
                                         file_display: file_display.to_string(),
                                         start_line,
+                                        end_line,
+                                        signature,
+                                        content_sha256,
                                         language: CfgLanguage::Python,
                                         kind: if class_stack.is_empty() {
                                             "function".to_string()
@@ -2796,6 +2932,7 @@ fn run_flow_index(args: FlowIndexArgs) -> anyhow::Result<()> {
                                 visit_node(
                                     child,
                                     source,
+                                    lines,
                                     file_abs,
                                     file_display,
                                     class_stack,
@@ -2810,6 +2947,7 @@ fn run_flow_index(args: FlowIndexArgs) -> anyhow::Result<()> {
                 visit_node(
                     tree.root_node(),
                     source,
+                    &lines,
                     &file_abs,
                     &file_display,
                     &mut class_stack,
@@ -2843,7 +2981,28 @@ fn run_flow_index(args: FlowIndexArgs) -> anyhow::Result<()> {
         items,
     };
 
-    let output_str = serde_json::to_string_pretty(&output)?;
+    let output_str = match args.format.as_str() {
+        "json" => serde_json::to_string_pretty(&output)?,
+        "jsonl" => {
+            let mut out = String::new();
+            out.push_str(&serde_json::to_string(&FlowIndexJsonlRecord::Stats {
+                files_scanned: output.files_scanned,
+                functions: output.functions,
+                by_language: &output.by_language,
+            })?);
+            out.push('\n');
+            for item in &output.items {
+                out.push_str(&serde_json::to_string(&FlowIndexJsonlRecord::Item { item })?);
+                out.push('\n');
+            }
+            out
+        }
+        other => {
+            return Err(anyhow!(
+                "Unsupported format: {other} (expected json or jsonl)"
+            ));
+        }
+    };
 
     if let Some(out) = &args.out {
         fs::write(out, &output_str)?;

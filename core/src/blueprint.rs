@@ -230,6 +230,7 @@ pub struct BlueprintStats {
     pub edges_resolved: usize,
     pub by_language: BTreeMap<String, usize>,
     pub by_edge_kind: BTreeMap<String, usize>,
+    pub by_edge_kind_resolved: BTreeMap<String, usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -455,6 +456,12 @@ pub fn blueprint_paths(paths: &[PathBuf], config: &BlueprintConfig) -> Result<Bl
             .by_edge_kind
             .entry(format!("{:?}", edge.kind).to_lowercase())
             .or_default() += 1;
+        if edge.resolved {
+            *stats
+                .by_edge_kind_resolved
+                .entry(format!("{:?}", edge.kind).to_lowercase())
+                .or_default() += 1;
+        }
     }
 
     Ok(BlueprintReport {

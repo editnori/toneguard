@@ -1160,15 +1160,52 @@ pub fn build_cfg_ts(
 }
 
 fn extract_ts_function_name(node: &tree_sitter::Node, source: &[u8]) -> String {
-    // Try to find name child
+    fn node_text(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+        node.utf8_text(source).ok().map(|s| s.to_string())
+    }
+
+    fn find_class_name(mut node: Option<tree_sitter::Node>, source: &[u8]) -> Option<String> {
+        while let Some(cur) = node {
+            let kind = cur.kind();
+            if kind == "class_declaration" || kind == "class" {
+                if let Some(name_node) = cur.child_by_field_name("name") {
+                    if let Some(name) = node_text(name_node, source) {
+                        return Some(name);
+                    }
+                }
+                return None;
+            }
+            node = cur.parent();
+        }
+        None
+    }
+
+    // Try to find name child.
     if let Some(name_node) = node.child_by_field_name("name") {
-        if let Ok(name) = name_node.utf8_text(source) {
-            return name.to_string();
+        if let Some(name) = node_text(name_node, source) {
+            if node.kind() == "method_definition" {
+                if let Some(class_name) = find_class_name(node.parent(), source) {
+                    return format!("{class_name}::{name}");
+                }
+            }
+            return name;
         }
     }
 
-    // For arrow functions assigned to a variable, check parent
-    // Default to anonymous
+    // For arrow functions assigned to a variable, walk up to `variable_declarator`.
+    let mut cur = node.parent();
+    while let Some(parent) = cur {
+        if parent.kind() == "variable_declarator" {
+            if let Some(name_node) = parent.child_by_field_name("name") {
+                if let Some(name) = node_text(name_node, source) {
+                    return name;
+                }
+            }
+            break;
+        }
+        cur = parent.parent();
+    }
+
     format!("anonymous_{}", node.start_position().row)
 }
 
@@ -1631,11 +1668,32 @@ pub fn build_cfg_python(
         return None;
     }
 
-    let name = node
+    fn node_text(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+        node.utf8_text(source).ok().map(|s| s.to_string())
+    }
+
+    fn find_py_class_name(mut node: Option<tree_sitter::Node>, source: &[u8]) -> Option<String> {
+        while let Some(cur) = node {
+            if cur.kind() == "class_definition" {
+                if let Some(name_node) = cur.child_by_field_name("name") {
+                    return node_text(name_node, source);
+                }
+                return None;
+            }
+            node = cur.parent();
+        }
+        None
+    }
+
+    let base_name = node
         .child_by_field_name("name")
-        .and_then(|n| n.utf8_text(source).ok())
-        .unwrap_or("anonymous")
-        .to_string();
+        .and_then(|n| node_text(n, source))
+        .unwrap_or_else(|| "anonymous".to_string());
+    let name = if let Some(class_name) = find_py_class_name(node.parent(), source) {
+        format!("{class_name}::{base_name}")
+    } else {
+        base_name
+    };
 
     let start_line = node.start_position().row as u32 + 1;
 

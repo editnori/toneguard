@@ -10,6 +10,10 @@
         "issues": []
       },
       {
+        "path": "/home/layth888/Desktop/toneguard/flows/flow-callgraph.md",
+        "issues": []
+      },
+      {
         "path": "/home/layth888/Desktop/toneguard/flows/cli-lint.md",
         "issues": []
       },
@@ -28,6 +32,10 @@
       {
         "path": "/home/layth888/Desktop/toneguard/flows/flow-audit.md",
         "issues": []
+      },
+      {
+        "path": "/home/layth888/Desktop/toneguard/flows/flow-blueprint-diff.md",
+        "issues": []
       }
     ],
     "error_count": 0,
@@ -35,7 +43,7 @@
   },
   "audit": {
     "summary": {
-      "files_scanned": 31,
+      "files_scanned": 32,
       "findings": 0,
       "by_category": {},
       "by_language": {}

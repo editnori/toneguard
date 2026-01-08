@@ -2,7 +2,7 @@
   "name": "toneguard",
   "displayName": "ToneGuard",
   "description": "Zero-setup AI slop detection for Markdown. Highlights generic, AI-style writing patterns instantly.",
-  "version": "0.1.72",
+  "version": "0.1.78",
   "publisher": "editnori",
   "icon": "icon.png",
   "engines": {
@@ -26,6 +26,7 @@
     "onCommand:dwg.runRecommended",
     "onCommand:dwg.flowAudit",
     "onCommand:dwg.flowPropose",
+    "onCommand:dwg.openMarkdownPreview",
     "onCommand:dwg.openFlowMap"
   ],
   "main": "./out/extension.js",
@@ -132,8 +133,36 @@
         "command": "dwg.openFlowMap",
         "title": "ToneGuard: Open Flow Map",
         "category": "ToneGuard"
+      },
+      {
+        "command": "dwg.openMarkdownPreview",
+        "title": "ToneGuard: Open Markdown Preview",
+        "category": "ToneGuard"
       }
     ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "dwg.openMarkdownPreview",
+          "when": "editorLangId == markdown",
+          "group": "navigation@3"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "dwg.openMarkdownPreview",
+          "when": "resourceLangId == markdown || resourceExtname == .md || resourceExtname == .markdown || resourceExtname == .mdx || resourceExtname == .mdoc || resourceExtname == .rst || resourceExtname == .txt",
+          "group": "navigation@3"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "dwg.openMarkdownPreview",
+          "when": "resourceExtname == .md || resourceExtname == .markdown || resourceExtname == .mdx || resourceExtname == .mdoc || resourceExtname == .rst || resourceExtname == .txt",
+          "group": "navigation@3"
+        }
+      ]
+    },
     "configuration": {
       "title": "Deterministic Writing Guard",
       "properties": {
@@ -384,6 +413,12 @@
     "autoprefixer": "^10.4.19",
     "cytoscape": "^3.30.4",
     "eslint": "^8.56.0",
+    "highlight.js": "^11.9.0",
+    "markdown-it": "^12.3.2",
+    "markdown-it-emoji": "^2.0.2",
+    "markdown-it-footnote": "^3.0.3",
+    "markdown-it-task-lists": "^2.1.1",
+    "mermaid": "^10.9.0",
     "postcss": "^8.4.38",
     "preact": "^10.25.4",
     "tailwindcss": "^3.4.17",

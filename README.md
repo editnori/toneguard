@@ -16,6 +16,7 @@ What you get:
 - Call graph (Rust + TS/JS/Py) with hub/orphan stats
 - Function index + CFG output (JSON + optional Mermaid)
 - Dashboard + Flow Map UI in VS Code (Blueprint / Calls / CFG)
+- Markdown Preview in VS Code (Mermaid render, syntax highlight, HTML/Confluence/PDF export)
 
 ## Quickstart
 
@@ -31,6 +32,11 @@ dwg-cli --config layth-style.yml --json . > reports/markdown-lint.json
 ```
 
 You can scope runs with `--profile`, or toggle categories with `--only`, `--enable`, and `--disable`. If you only want document diagnostics (no repo checks), pass `--no-repo-checks`.
+
+On Linux, if you see `GLIBC_2.xx not found` when running bundled binaries, the VSIX was built on a newer distro than your machine. Fix options:
+
+- Install `dwg-cli` + `dwg-lsp` from source and set `dwg.cliCommand` / `dwg.command` to the PATH binaries.
+- Rebuild the VSIX on Ubuntu 22.04 (GLIBC 2.35) and reinstall it.
 
 ### Extension
 
@@ -50,6 +56,8 @@ Common outputs:
 - `reports/flow-index.json`: function/method index (best-effort)
 - `reports/flow-blueprint.json`: file dependency graph (best-effort)
 - `reports/flow-callgraph.json`: function call graph (best-effort)
+
+The Dashboard also has **Copy bundle**, and Flow Map has **Copy packet**. These copy a JSON payload you can paste into Cursor/Claude/Codex as a repo review prompt.
 
 ### Flow tools
 

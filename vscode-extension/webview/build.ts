@@ -64,6 +64,14 @@ async function buildWebviews() {
         format: 'iife',
     });
 
+    console.log('Building preview...');
+    await build({
+        ...commonOptions,
+        entryPoints: [path.resolve(__dirname, 'src/preview/main.tsx')],
+        outfile: path.join(outDir, 'preview.js'),
+        format: 'iife',
+    });
+
     // Build CSS with Tailwind CLI
     console.log('Building styles with Tailwind...');
     const cssInput = path.resolve(__dirname, 'src/styles.css');
@@ -72,7 +80,7 @@ async function buildWebviews() {
     await $`bunx tailwindcss -c ${path.resolve(__dirname, 'tailwind.config.cjs')} -i ${cssInput} -o ${cssOutput} --minify`.quiet();
 
     // Get file sizes
-    const files = ['dashboard.js', 'flowmap.js', 'style.css'];
+    const files = ['dashboard.js', 'flowmap.js', 'preview.js', 'style.css'];
     console.log('\nOutput:');
     for (const file of files) {
         const filePath = path.join(outDir, file);

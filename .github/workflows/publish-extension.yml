@@ -15,10 +15,12 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: ubuntu-latest
+          # Pin Ubuntu for glibc compatibility (ubuntu-latest is currently 24.04+ and can
+          # produce binaries requiring newer GLIBC than many users have installed).
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             platform: linux-x64
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             target: aarch64-unknown-linux-gnu
             platform: linux-arm64
             cross: true
@@ -79,6 +81,33 @@ jobs:
         run: |
           strip vscode-extension/bin/${{ matrix.platform }}/dwg-lsp || true
           strip vscode-extension/bin/${{ matrix.platform }}/dwg || true
+
+      - name: Validate GLIBC baseline (Linux only)
+        if: startsWith(matrix.platform, 'linux-')
+        shell: bash
+        run: |
+          set -euo pipefail
+          max_allowed="2.35"
+          bins=(
+            "vscode-extension/bin/${{ matrix.platform }}/dwg"
+            "vscode-extension/bin/${{ matrix.platform }}/dwg-lsp"
+          )
+          for bin in "${bins[@]}"; do
+            if [[ ! -f "$bin" ]]; then
+              echo "Missing binary: $bin"
+              exit 1
+            fi
+            max=$(readelf -V "$bin" | sed -n 's/.*Name: GLIBC_\\([0-9.]*\\).*/\\1/p' | sort -V | tail -n 1)
+            echo "$bin max GLIBC: ${max:-unknown}"
+            if [[ -n "${max:-}" ]]; then
+              # Fail if max > max_allowed
+              highest=$(printf '%s\n' "$max_allowed" "$max" | sort -V | tail -n 1)
+              if [[ "$highest" != "$max_allowed" ]]; then
+                echo "Binary $bin requires GLIBC_$max which exceeds GLIBC_$max_allowed"
+                exit 1
+              fi
+            fi
+          done
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4

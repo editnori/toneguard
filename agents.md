@@ -1,5 +1,10 @@
 ﻿# Release checklist
 
+Tooling rules for this repo:
+
+- Rust: `cargo` only
+- Extension + webviews: `bun` only (no npm/yarn)
+
 This repo uses tags + a VSIX for local installs.
 If you want `cargo install dwg-cli` to work for everyone, you also need to publish both crates.
 
@@ -20,10 +25,13 @@ If you want `cargo install dwg-cli` to work for everyone, you also need to publi
    cargo test --workspace
    ./scripts/install-local.sh
    ```
-5. (Optional) Run the blueprint refactor guard against the previous tag:
+5. Linux compatibility sanity check (optional, but catches bad builds):
+   - If you ship bundled Linux binaries, build them on Ubuntu 22.04 (GLIBC 2.35) or older.
+   - CI enforces a GLIBC baseline for `dwg` + `dwg-lsp` via `readelf -V`.
+6. (Optional) Run the blueprint refactor guard against the previous tag:
    ```bash
    ./scripts/blueprint-refactor-guard.sh --base <tag> --require
    ```
-6. Upload the VSIX to the marketplaces.
+7. Upload the VSIX to the marketplaces.
 
 Skip step 3 only if the crate version already exists on crates.io. Otherwise the extension's global install path will break.

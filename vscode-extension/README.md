@@ -13,6 +13,7 @@ ToneGuard flags common AI-style writing patterns in Markdown and text files. It 
 - Live diagnostics for supported file types (Problems panel + inline squiggles)
 - Dashboard (Review, Findings, Organizer, Settings)
 - Flow Map (Blueprint graph + clusters, Calls view, CFG viewer with copyable Mermaid)
+- Markdown Preview (Mermaid render, syntax highlight, HTML/Confluence/PDF export)
 - Optional skill installer (Cursor / Claude Code / Codex)
 
 ## Reports
@@ -27,6 +28,11 @@ The recommended review writes files under `reports/`:
 - `reports/flow-callgraph.json` (best-effort)
 - `reports/flow-blueprint-diff.json` (best-effort)
 - `reports/flow-blueprint-mapping.yml` (best-effort)
+
+## LLM review helpers
+
+- Dashboard: **Copy bundle** (includes report paths + small samples)
+- Flow Map: **Copy packet** (includes blueprint/callgraph context for the current selection)
 
 ## Configuration
 
@@ -48,6 +54,9 @@ Open the Command Palette and run:
 - `ToneGuard: Open Flow Map`
 - `ToneGuard: Flow Audit Workspace`
 - `ToneGuard: Generate Flow Proposal (Markdown)`
+- `ToneGuard: Open Markdown Preview`
+
+You can also right-click a markdown file (or tab) and choose **ToneGuard: Open Markdown Preview**.
 
 ## Ignore controls
 
@@ -73,6 +82,13 @@ If you want CI or batch runs:
 cargo install dwg-cli --force
 dwg-cli --config layth-style.yml --strict docs/
 ```
+
+## Troubleshooting (Linux)
+
+If you see `GLIBC_2.xx not found`, the bundled binaries were built on a newer distro than your machine.
+
+- Install `dwg-cli` + `dwg-lsp` from source and set `dwg.cliCommand` / `dwg.command` to use PATH.
+- Or rebuild the VSIX on Ubuntu 22.04 and reinstall it.
 
 ## Feedback
 
